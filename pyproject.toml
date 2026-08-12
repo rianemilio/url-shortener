@@ -1,0 +1,55 @@
+[project]
+name = "url-shortner"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Rian Emilio", email = "rianemilio@proton.me" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aio-pika>=10.0.1",
+    "fastapi>=0.141.1",
+    "motor>=3.7.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "redis>=8.1.0",
+    "uvicorn[standard]>=0.52.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "asgi-lifespan>=2.1.0",
+    "httpx>=0.28.1",
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.2",
+    "testcontainers[mongodb,rabbitmq,redis]>=4.15.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+markers = ["integration: requer Docker (testcontainers) para rodar"]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "url_shortner.infrastructure.*"
+ignore_missing_imports = true
+disallow_untyped_defs = false
