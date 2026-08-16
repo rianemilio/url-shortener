@@ -1,0 +1,84 @@
+# url-shortner
+
+Encurtador de URLs propositalmente "overengineered": a funcionalidade é mínima
+(encurtar + redirecionar), mas a arquitetura aplica Clean Architecture, CQRS e
+design orientado a eventos, com MongoDB e Redis como bancos NoSQL.
+
+## Stack
+
+- **Backend**: Python 3.12 + FastAPI
+- **Banco de dados**: MongoDB (fonte da verdade) + Redis (cache de lookup)
+- **Mensageria**: RabbitMQ (eventos `URLCreated` e `URLClicked`)
+- **Gerenciador de pacotes**: [uv](https://github.com/astral-sh/uv)
+- **Qualidade**: ruff (lint/format) + mypy
+
+## Arquitetura
+
+```
+domain/          entidades, value objects, eventos e regras puras, sem dependências externas
+application/     casos de uso (commands/queries) e portas (Protocol) que a infra implementa
+infrastructure/  adapters concretos: Mongo, Redis, RabbitMQ
+interface/       API FastAPI e worker consumidor de eventos
+bootstrap/       composição manual das dependências (container de DI)
+```
+
+Regra de dependência: `domain` e `application` nunca importam `infrastructure` ou
+`interface`. As portas ficam em `application/ports/*.py` como `typing.Protocol`;
+os adapters em `infrastructure/**` as implementam por structural typing.
+
+### Decisões de design
+
+- **Geração de código curto**: contador atômico no MongoDB (`findOneAndUpdate`
+  com `$inc`), convertido para base62. Como o Mongo é a única fonte de verdade
+  (inclusive do contador) e a sequência é estritamente crescente, não há
+  necessidade de retry por colisão, diferente de estratégias baseadas em hash
+  ou valores aleatórios.
+- **Redis é só cache**: nunca guarda dado que não possa ser reconstruído a
+  partir do Mongo. Se cair, o sistema continua funcionando (com mais leituras
+  no Mongo).
+- **CQRS**: `CreateShortUrlCommandHandler` só escreve; `GetOriginalUrlQueryHandler`
+  só lê. Cada um recebe suas portas via injeção de construtor.
+- **Eventos com consumidor de verdade**: o evento `URLClicked` é
+  publicado no redirect (sem bloquear a resposta) e consumido por um worker
+  separado que incrementa `click_count` no Mongo: dá uso genuíno ao RabbitMQ
+  sem virar uma feature completa de analytics. O evento `URLCreated` é
+  publicado para uma extensão futura (hoje sem consumidor).
+
+## Rodando com Docker Compose
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Sobe `api` (porta 8000), `worker`, `mongo`, `redis` e `rabbitmq` (painel de
+management em `localhost:15672`, usuário/senha `guest`/`guest`).
+
+### Testando manualmente
+
+```bash
+curl -X POST localhost:8000/urls -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/pagina-longa"}'
+# => {"code": "1", "short_url": "http://localhost:8000/1", ...}
+
+curl -v localhost:8000/1
+# => 307 Temporary Redirect para a URL original
+```
+
+Após alguns segundos, o `click_count` do documento no Mongo deve ter sido
+incrementado pelo worker. Confirme com:
+
+```bash
+docker compose exec mongo mongosh url_shortner --eval 'db.urls.find()'
+```
+
+## Desenvolvimento local
+
+```bash
+uv sync
+uv run pytest              # testes unitários (rápidos, sem Docker)
+uv run pytest -m integration  # teste de integração ponta a ponta (requer Docker)
+uv run ruff check .
+uv run ruff format .
+uv run mypy src/
+```
