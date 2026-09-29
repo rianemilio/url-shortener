@@ -48,7 +48,7 @@ services:
 
   worker:
     build: .
-    command: ["python", "-m", "url_shortner.interface.worker.click_consumer"]
+    command: ["python", "-m", "url_shortener.interface.worker.click_consumer"]
     environment:
       APP_MONGO_URI: mongodb://mongo:27017
       APP_REDIS_URI: redis://redis:6379/0

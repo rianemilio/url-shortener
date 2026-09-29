@@ -1,7 +1,7 @@
 import pytest
 
-from url_shortner.domain.services import code_scrambler
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.services import code_scrambler
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 def test_codes_have_fixed_length_and_are_valid_short_codes() -> None:

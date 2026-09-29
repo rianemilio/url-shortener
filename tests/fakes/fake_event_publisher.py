@@ -1,4 +1,4 @@
-from url_shortner.application.ports.event_publisher_port import DomainEvent
+from url_shortener.application.ports.event_publisher_port import DomainEvent
 
 
 class FakeEventPublisher:

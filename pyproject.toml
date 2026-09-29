@@ -1,5 +1,5 @@
 [project]
-name = "url-shortner"
+name = "url-shortener"
 version = "0.1.0"
 description = "Encurtador de URLs com Clean Architecture, CQRS e eventos (FastAPI, MongoDB, Redis, RabbitMQ)"
 authors = [
@@ -50,6 +50,6 @@ python_version = "3.12"
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = "url_shortner.infrastructure.*"
+module = "url_shortener.infrastructure.*"
 ignore_missing_imports = true
 disallow_untyped_defs = false

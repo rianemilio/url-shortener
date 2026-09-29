@@ -1,12 +1,12 @@
 import pytest
 
 from tests.fakes.fake_event_publisher import FakeEventPublisher
-from url_shortner.application.commands.track_click import (
+from url_shortener.application.commands.track_click import (
     TrackClickCommand,
     TrackClickCommandHandler,
 )
-from url_shortner.domain.events.url_clicked import URLClicked
-from url_shortner.domain.events.url_created import URLCreated
+from url_shortener.domain.events.url_clicked import URLClicked
+from url_shortener.domain.events.url_created import URLCreated
 
 
 class FailingEventPublisher:

@@ -4,12 +4,12 @@ from tests.fakes.fake_cache import FakeCache
 from tests.fakes.fake_code_generator import FakeCodeGenerator
 from tests.fakes.fake_event_publisher import FakeEventPublisher
 from tests.fakes.fake_url_repository import FakeUrlRepository
-from url_shortner.application.commands.create_short_url import (
+from url_shortener.application.commands.create_short_url import (
     CreateShortUrlCommand,
     CreateShortUrlCommandHandler,
 )
-from url_shortner.domain.events.url_created import URLCreated
-from url_shortner.domain.exceptions import InvalidUrlError
+from url_shortener.domain.events.url_created import URLCreated
+from url_shortener.domain.exceptions import InvalidUrlError
 
 
 def make_handler() -> tuple[

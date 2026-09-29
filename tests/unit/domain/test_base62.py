@@ -1,6 +1,6 @@
 import pytest
 
-from url_shortner.domain.services import base62
+from url_shortener.domain.services import base62
 
 
 @pytest.mark.parametrize(

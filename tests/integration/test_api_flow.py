@@ -33,7 +33,7 @@ def _env(containers, monkeypatch):
     monkeypatch.setenv("APP_REDIS_URI", containers["redis_uri"])
     monkeypatch.setenv("APP_RABBITMQ_URI", containers["rabbitmq_uri"])
 
-    from url_shortner.config import get_settings
+    from url_shortener.config import get_settings
 
     get_settings.cache_clear()
     yield
@@ -42,7 +42,7 @@ def _env(containers, monkeypatch):
 
 @pytest.fixture
 async def app_client(_env):
-    from url_shortner.interface.api.main import app
+    from url_shortener.interface.api.main import app
 
     async with LifespanManager(app):
         transport = httpx.ASGITransport(app=app)
@@ -52,7 +52,7 @@ async def app_client(_env):
 
 @pytest.fixture
 async def running_worker(_env):
-    from url_shortner.interface.worker.click_consumer import run
+    from url_shortener.interface.worker.click_consumer import run
 
     task = asyncio.create_task(run())
     await asyncio.sleep(1)
@@ -81,7 +81,7 @@ async def test_click_count_incremented_by_worker(
 ) -> None:
     from motor.motor_asyncio import AsyncIOMotorClient
 
-    from url_shortner.config import Settings
+    from url_shortener.config import Settings
 
     create_response = await app_client.post("/urls", json={"url": "https://example.com/worker"})
     code = create_response.json()["code"]

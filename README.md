@@ -1,4 +1,4 @@
-# url-shortner
+# url-shortener
 
 Encurtador de URLs propositalmente "overengineered": a funcionalidade é mínima
 (encurtar + redirecionar), mas a arquitetura aplica Clean Architecture, CQRS e
@@ -85,7 +85,7 @@ Após alguns segundos, o `click_count` do documento no Mongo deve ter sido
 incrementado pelo worker. Confirme com:
 
 ```bash
-docker compose exec mongo mongosh url_shortner --eval 'db.urls.find()'
+docker compose exec mongo mongosh url_shortener --eval 'db.urls.find()'
 ```
 
 ## Desenvolvimento local

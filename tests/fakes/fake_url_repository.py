@@ -1,5 +1,5 @@
-from url_shortner.domain.entities.short_url import ShortUrl
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.entities.short_url import ShortUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 class FakeUrlRepository:

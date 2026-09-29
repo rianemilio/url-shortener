@@ -4,14 +4,14 @@ import pytest
 
 from tests.fakes.fake_cache import FakeCache, UnavailableCache
 from tests.fakes.fake_url_repository import FakeUrlRepository
-from url_shortner.application.queries.get_original_url import (
+from url_shortener.application.queries.get_original_url import (
     GetOriginalUrlQuery,
     GetOriginalUrlQueryHandler,
 )
-from url_shortner.domain.entities.short_url import ShortUrl
-from url_shortner.domain.exceptions import UrlNotFoundError
-from url_shortner.domain.value_objects.original_url import OriginalUrl
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.entities.short_url import ShortUrl
+from url_shortener.domain.exceptions import UrlNotFoundError
+from url_shortener.domain.value_objects.original_url import OriginalUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 async def _repo_with(code: str, url: str) -> FakeUrlRepository:

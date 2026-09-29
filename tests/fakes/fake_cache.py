@@ -1,5 +1,5 @@
-from url_shortner.domain.value_objects.original_url import OriginalUrl
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.value_objects.original_url import OriginalUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 class FakeCache:

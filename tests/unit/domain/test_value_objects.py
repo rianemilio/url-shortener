@@ -1,8 +1,8 @@
 import pytest
 
-from url_shortner.domain.exceptions import InvalidShortCodeError, InvalidUrlError
-from url_shortner.domain.value_objects.original_url import OriginalUrl
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.exceptions import InvalidShortCodeError, InvalidUrlError
+from url_shortener.domain.value_objects.original_url import OriginalUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 @pytest.mark.parametrize("value", ["https://example.com", "http://example.com/path?x=1"])

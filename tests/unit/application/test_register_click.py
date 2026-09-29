@@ -3,13 +3,13 @@ from datetime import UTC, datetime
 import pytest
 
 from tests.fakes.fake_url_repository import FakeUrlRepository
-from url_shortner.application.commands.register_click import (
+from url_shortener.application.commands.register_click import (
     RegisterClickCommand,
     RegisterClickCommandHandler,
 )
-from url_shortner.domain.entities.short_url import ShortUrl
-from url_shortner.domain.value_objects.original_url import OriginalUrl
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.entities.short_url import ShortUrl
+from url_shortener.domain.value_objects.original_url import OriginalUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 @pytest.mark.asyncio

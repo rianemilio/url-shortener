@@ -1,7 +1,7 @@
 from itertools import count
 
-from url_shortner.domain.services import base62
-from url_shortner.domain.value_objects.short_code import ShortCode
+from url_shortener.domain.services import base62
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 class FakeCodeGenerator:
