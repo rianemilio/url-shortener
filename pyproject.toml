@@ -1,7 +1,7 @@
 [project]
 name = "url-shortner"
 version = "0.1.0"
-description = "Add your description here"
+description = "Encurtador de URLs com Clean Architecture, CQRS e eventos (FastAPI, MongoDB, Redis, RabbitMQ)"
 authors = [
     { name = "Rian Emilio", email = "rianemilio@proton.me" }
 ]

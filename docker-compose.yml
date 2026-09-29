@@ -22,7 +22,9 @@ services:
     ports:
       - "15672:15672"
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      # su-exec: rodar a CLI como root cria o .erlang.cookie com dono errado e derruba o broker.
+      # check_port_connectivity (e não ping): só fica healthy quando a porta AMQP aceita conexões.
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 5s
       timeout: 5s
       retries: 10

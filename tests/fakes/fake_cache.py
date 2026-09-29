@@ -11,3 +11,13 @@ class FakeCache:
 
     async def set(self, code: ShortCode, original_url: OriginalUrl) -> None:
         self.store[str(code)] = original_url
+
+
+class UnavailableCache:
+    """Simula o Redis fora do ar: toda operação levanta erro."""
+
+    async def get(self, code: ShortCode) -> OriginalUrl | None:
+        raise ConnectionError("cache indisponível")
+
+    async def set(self, code: ShortCode, original_url: OriginalUrl) -> None:
+        raise ConnectionError("cache indisponível")

@@ -3,13 +3,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from url_shortner.bootstrap.container import Container
+from url_shortner.bootstrap.container import ApiContainer
 from url_shortner.interface.api.routers import redirect, urls
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    container = await Container.create()
+    container = await ApiContainer.create()
     app.state.container = container
     try:
         yield

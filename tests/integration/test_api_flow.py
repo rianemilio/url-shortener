@@ -20,7 +20,10 @@ def containers():
         yield {
             "mongo_uri": mongo.get_connection_url(),
             "redis_uri": f"redis://{redis.get_container_host_ip()}:{redis.get_exposed_port(6379)}/0",
-            "rabbitmq_uri": rabbitmq.get_connection_url(),
+            "rabbitmq_uri": (
+                f"amqp://{rabbitmq.username}:{rabbitmq.password}@"
+                f"{rabbitmq.get_container_host_ip()}:{rabbitmq.get_exposed_port(rabbitmq.port)}/"
+            ),
         }
 
 

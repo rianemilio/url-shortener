@@ -29,20 +29,36 @@ os adapters em `infrastructure/**` as implementam por structural typing.
 ### Decisões de design
 
 - **Geração de código curto**: contador atômico no MongoDB (`findOneAndUpdate`
-  com `$inc`), convertido para base62. Como o Mongo é a única fonte de verdade
-  (inclusive do contador) e a sequência é estritamente crescente, não há
-  necessidade de retry por colisão, diferente de estratégias baseadas em hash
-  ou valores aleatórios.
+  com `$inc`), embaralhado e convertido para base62 com 7 caracteres. Como o
+  Mongo é a única fonte de verdade (inclusive do contador) e a sequência é
+  estritamente crescente, não há necessidade de retry por colisão, diferente
+  de estratégias baseadas em hash ou valores aleatórios.
+- **Códigos não enumeráveis**: o contador passa por `n * K mod 62^7`, com `K`
+  coprimo com `62^7` (`domain/services/code_scrambler.py`). Isso é uma bijeção,
+  então continua sem colisão, mas `/1`, `/2`, `/3`... deixam de listar todas as
+  URLs. Não é criptografia: é ofuscação suficiente para impedir varredura
+  trivial. O espaço comporta ~3,5 trilhões de códigos.
 - **Redis é só cache**: nunca guarda dado que não possa ser reconstruído a
   partir do Mongo. Se cair, o sistema continua funcionando (com mais leituras
-  no Mongo).
+  no Mongo); falhas de leitura e escrita no cache são logadas e ignoradas.
 - **CQRS**: `CreateShortUrlCommandHandler` só escreve; `GetOriginalUrlQueryHandler`
-  só lê. Cada um recebe suas portas via injeção de construtor.
+  só lê, sem efeitos colaterais. O rastreamento do clique é um comando separado
+  (`TrackClickCommandHandler`), que o router agenda como background task depois
+  de resolver a URL. Cada handler recebe suas portas via injeção de construtor.
 - **Eventos com consumidor de verdade**: o evento `URLClicked` é
   publicado no redirect (sem bloquear a resposta) e consumido por um worker
   separado que incrementa `click_count` no Mongo: dá uso genuíno ao RabbitMQ
   sem virar uma feature completa de analytics. O evento `URLCreated` é
   publicado para uma extensão futura (hoje sem consumidor).
+- **Erros no worker**: mensagens que nunca vão dar certo (JSON inválido, sem
+  `code`, código fora do formato) são rejeitadas sem requeue e vão para a DLQ
+  `url_clicked_queue.dlq`. Falhas transitórias (ex.: Mongo fora do ar) voltam
+  para a fila após um pequeno backoff.
+- **`click_count` é aproximado, de propósito**: o RabbitMQ entrega
+  *at-least-once* e o `$inc` não é idempotente, então uma reentrega (ex.: worker
+  cai entre o `$inc` e o ack) conta o clique duas vezes. Deduplicar exigiria um
+  id por evento e um registro de eventos processados, um custo que não se paga
+  para um contador de cliques.
 
 ## Rodando com Docker Compose
 
@@ -59,9 +75,9 @@ management em `localhost:15672`, usuário/senha `guest`/`guest`).
 ```bash
 curl -X POST localhost:8000/urls -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/pagina-longa"}'
-# => {"code": "1", "short_url": "http://localhost:8000/1", ...}
+# => {"code": "cJinsL5", "short_url": "http://localhost:8000/cJinsL5", ...}
 
-curl -v localhost:8000/1
+curl -v localhost:8000/cJinsL5
 # => 307 Temporary Redirect para a URL original
 ```
 

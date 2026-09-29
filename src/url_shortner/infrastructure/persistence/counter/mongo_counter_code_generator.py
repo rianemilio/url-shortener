@@ -1,7 +1,7 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
-from url_shortner.domain.services import base62
+from url_shortner.domain.services import code_scrambler
 from url_shortner.domain.value_objects.short_code import ShortCode
 from url_shortner.infrastructure.persistence.mongo.models import (
     COUNTERS_COLLECTION,
@@ -20,4 +20,4 @@ class MongoCounterCodeGenerator:
             upsert=True,
             return_document=ReturnDocument.AFTER,
         )
-        return ShortCode(base62.encode(document["seq"]))
+        return ShortCode(code_scrambler.scramble(document["seq"]))
