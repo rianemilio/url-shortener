@@ -8,11 +8,13 @@ import aio_pika
 from url_shortener.application.commands.register_click import RegisterClickCommand
 from url_shortener.bootstrap.container import WorkerContainer
 from url_shortener.domain.exceptions import DomainError
+from url_shortener.infrastructure.messaging.topology import MAX_DELIVERY_RETRIES
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-_TRANSIENT_ERROR_BACKOFF_SECONDS = 1.0
+_RETRY_BACKOFF_BASE_SECONDS = 1.0
+_RETRY_BACKOFF_MAX_SECONDS = 30.0
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
@@ -30,6 +32,16 @@ def _parse_command(body: bytes) -> RegisterClickCommand:
     return RegisterClickCommand(code=code)
 
 
+def _delivery_count(message: aio_pika.abc.AbstractIncomingMessage) -> int:
+    """Quantas vezes a mensagem já foi devolvida à fila (header da quorum queue)."""
+    value = (message.headers or {}).get("x-delivery-count", 0)
+    return value if isinstance(value, int) else 0
+
+
+def _retry_delay_seconds(retries: int) -> float:
+    return float(min(_RETRY_BACKOFF_BASE_SECONDS * 2**retries, _RETRY_BACKOFF_MAX_SECONDS))
+
+
 async def _handle_message(
     message: aio_pika.abc.AbstractIncomingMessage, container: WorkerContainer
 ) -> None:
@@ -41,10 +53,20 @@ async def _handle_message(
         logger.exception("Mensagem de click inválida, enviada para a DLQ")
         await message.reject(requeue=False)
     except Exception:
-        # Erro transitório (ex.: Mongo fora do ar): devolve para a fila e tenta de novo.
-        logger.exception("Falha ao processar mensagem de click, requeued")
+        # Erro transitório (ex.: Mongo fora do ar): espera e devolve para a fila. Passado o
+        # x-delivery-limit da fila, o próprio RabbitMQ manda a mensagem para a DLQ.
+        retries = _delivery_count(message)
+        delay = _retry_delay_seconds(retries)
+        logger.exception(
+            "Falha ao processar mensagem de click (tentativa %d de %d), requeue em %.1fs",
+            retries + 1,
+            MAX_DELIVERY_RETRIES + 1,
+            delay,
+        )
+        # Espera ANTES do nack: com o nack a mensagem volta na hora e seria reentregue
+        # imediatamente a outro slot do prefetch, anulando o backoff.
+        await asyncio.sleep(delay)
         await message.nack(requeue=True)
-        await asyncio.sleep(_TRANSIENT_ERROR_BACKOFF_SECONDS)
     else:
         await message.ack()
         logger.info("Click registrado para o código %s", command.code)

@@ -175,3 +175,56 @@ async def test_create_is_rate_limited_per_client(_env, containers, monkeypatch) 
 
     assert statuses == [201, 201, 429]
     assert 0 < int(limited.headers["retry-after"]) <= 60
+
+
+@pytest.mark.asyncio
+async def test_message_goes_to_dlq_after_delivery_limit(containers) -> None:
+    import aio_pika
+
+    from url_shortener.infrastructure.messaging.topology import (
+        MAX_DELIVERY_RETRIES,
+        URL_CLICKED_DEAD_LETTER_QUEUE,
+        declare_topology,
+    )
+
+    connection = await aio_pika.connect(containers["rabbitmq_uri"])
+    async with connection:
+        channel = await connection.channel()
+        topology = await declare_topology(channel)
+        queue = topology.url_clicked_queue
+        dlq = await channel.declare_queue(URL_CLICKED_DEAD_LETTER_QUEUE, durable=True)
+        await queue.purge()
+        await dlq.purge()
+
+        await topology.events_exchange.publish(
+            aio_pika.Message(body=b'{"code": "retry1"}'), routing_key="url.clicked"
+        )
+
+        # Simula um worker com falha transitória permanente: devolve a mensagem sempre,
+        # até ela sumir da fila (o broker a manda para a DLQ ao estourar o limite).
+        deliveries = 0
+        dead = None
+        for _ in range(50):
+            message = await queue.get(fail=False)
+            if message is not None:
+                deliveries += 1
+                await message.nack(requeue=True)
+                continue
+            dead = await dlq.get(fail=False)
+            if dead is not None:
+                break
+            await asyncio.sleep(0.1)
+
+    assert deliveries == MAX_DELIVERY_RETRIES + 1
+    assert dead is not None and dead.body == b'{"code": "retry1"}'
+
+
+@pytest.mark.asyncio
+async def test_readiness_reports_all_dependencies_up(app_client: httpx.AsyncClient) -> None:
+    response = await app_client.get("/health/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "checks": {"mongo": "ok", "redis": "ok", "rabbitmq": "ok"},
+    }

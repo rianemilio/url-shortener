@@ -10,6 +10,11 @@ URL_CLICKED_QUEUE = "url_clicked_queue"
 DEAD_LETTER_EXCHANGE = "url_events.dlx"
 URL_CLICKED_DEAD_LETTER_QUEUE = "url_clicked_queue.dlq"
 
+# Quantas vezes uma mensagem pode voltar para a fila após falha transitória antes de ir
+# para a DLQ. Constante (e não configuração) porque API e worker declaram a mesma fila e
+# argumentos divergentes fariam a declaração falhar com PRECONDITION_FAILED.
+MAX_DELIVERY_RETRIES = 5
+
 
 @dataclass(frozen=True, slots=True)
 class Topology:
@@ -37,7 +42,13 @@ async def declare_topology(channel: aio_pika.abc.AbstractChannel) -> Topology:
     url_clicked_queue = await channel.declare_queue(
         URL_CLICKED_QUEUE,
         durable=True,
-        arguments={"x-dead-letter-exchange": DEAD_LETTER_EXCHANGE},
+        arguments={
+            # Quorum queue: o broker conta as entregas (header x-delivery-count) e, passado o
+            # x-delivery-limit, manda a mensagem para a DLQ sozinho.
+            "x-queue-type": "quorum",
+            "x-delivery-limit": MAX_DELIVERY_RETRIES,
+            "x-dead-letter-exchange": DEAD_LETTER_EXCHANGE,
+        },
     )
     await url_clicked_queue.bind(events_exchange, routing_key=URLClicked.ROUTING_KEY)
 

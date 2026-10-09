@@ -53,7 +53,11 @@ os adapters em `infrastructure/**` as implementam por structural typing.
 - **Erros no worker**: mensagens que nunca vão dar certo (JSON inválido, sem
   `code`, código fora do formato) são rejeitadas sem requeue e vão para a DLQ
   `url_clicked_queue.dlq`. Falhas transitórias (ex.: Mongo fora do ar) voltam
-  para a fila após um pequeno backoff.
+  para a fila com espera exponencial (1s, 2s, 4s... até 30s). A fila de cliques
+  é uma *quorum queue* com `x-delivery-limit`: o próprio RabbitMQ conta as
+  entregas e, após 5 tentativas extras (~1 min), manda a mensagem para a DLQ.
+  Mensagens na DLQ podem ser reprocessadas movendo-as de volta pelo painel de
+  management (plugin shovel) quando o problema for resolvido.
 - **`click_count` é aproximado, de propósito**: o RabbitMQ entrega
   *at-least-once* e o `$inc` não é idempotente, então uma reentrega (ex.: worker
   cai entre o `$inc` e o ack) conta o clique duas vezes. Deduplicar exigiria um
@@ -69,6 +73,12 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   (`APP_REDIS_TIMEOUT_SECONDS`, 0,5s) e RabbitMQ (`APP_RABBITMQ_TIMEOUT_SECONDS`,
   2s). Sem eles, um serviço travado (que não recusa a conexão, só não
   responde) prende a requisição indefinidamente (Redis) ou por 30s (Mongo).
+- **Validação de URL contra phishing**: URLs com credenciais
+  (`https://google.com@evil.com`, cujo host real é `evil.com`) são rejeitadas.
+- **Health checks**: `GET /health` é *liveness*: não toca dependências, para
+  o orquestrador não reiniciar a API só porque o Mongo caiu. `GET /health/ready`
+  é *readiness*: só o Mongo é obrigatório (`503` sem ele); sem Redis ou
+  RabbitMQ a API segue funcionando e responde `200` com status `degraded`.
 - **Rate limit na criação**: `POST /urls` aceita até
   `APP_RATE_LIMIT_CREATE_REQUESTS` chamadas por IP a cada
   `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (padrão 20/min); acima disso responde
@@ -86,6 +96,7 @@ docker compose up --build
 
 Sobe `api` (porta 8000), `worker`, `mongo`, `redis` e `rabbitmq` (painel de
 management em `localhost:15672`, usuário/senha `guest`/`guest`).
+`api` e `worker` usam `restart: unless-stopped`: se caírem, voltam sozinhos.
 
 ### Testando manualmente
 

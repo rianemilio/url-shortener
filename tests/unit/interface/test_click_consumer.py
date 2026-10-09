@@ -15,8 +15,9 @@ from url_shortener.interface.worker import click_consumer
 
 
 class FakeMessage:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, headers: dict[str, Any] | None = None) -> None:
         self.body = body
+        self.headers = headers or {}
         self.outcome: str | None = None
 
     async def ack(self) -> None:
@@ -39,8 +40,10 @@ class FakeWorkerContainer:
         self.register_click_handler = RegisterClickCommandHandler(repository)
 
 
-async def _handle(body: bytes, repository: FakeUrlRepository) -> FakeMessage:
-    message = FakeMessage(body)
+async def _handle(
+    body: bytes, repository: FakeUrlRepository, headers: dict[str, Any] | None = None
+) -> FakeMessage:
+    message = FakeMessage(body, headers)
     await click_consumer._handle_message(
         cast(Any, message), cast(WorkerContainer, FakeWorkerContainer(repository))
     )
@@ -78,11 +81,35 @@ async def test_dead_letters_permanently_invalid_messages(body: bytes) -> None:
 
 @pytest.mark.asyncio
 async def test_requeues_on_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(click_consumer, "_TRANSIENT_ERROR_BACKOFF_SECONDS", 0)
+    monkeypatch.setattr(click_consumer, "_RETRY_BACKOFF_BASE_SECONDS", 0)
 
     message = await _handle(b'{"code": "abc"}', BrokenRepository())
 
     assert message.outcome == "requeue"
+
+
+@pytest.mark.asyncio
+async def test_waits_backoff_before_requeue(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    async def fake_sleep(delay: float) -> None:
+        events.append(f"sleep {delay}")
+
+    monkeypatch.setattr(click_consumer.asyncio, "sleep", fake_sleep)
+
+    message = await _handle(b'{"code": "abc"}', BrokenRepository(), {"x-delivery-count": 2})
+    events.append(f"outcome {message.outcome}")
+
+    # Sleep antes do nack: senão a mensagem seria reentregue na hora.
+    assert events == ["sleep 4.0", "outcome requeue"]
+
+
+@pytest.mark.parametrize(
+    ("retries", "expected"),
+    [(0, 1.0), (1, 2.0), (2, 4.0), (4, 16.0), (5, 30.0), (20, 30.0)],
+)
+def test_retry_delay_grows_exponentially_up_to_cap(retries: int, expected: float) -> None:
+    assert click_consumer._retry_delay_seconds(retries) == expected
 
 
 class FakeQueue:

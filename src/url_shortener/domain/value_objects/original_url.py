@@ -19,5 +19,9 @@ class OriginalUrl:
         if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
             raise InvalidUrlError(f"URL inválida: {self.value!r}")
 
+        # Truque de phishing: em https://google.com@evil.com o host real é evil.com.
+        if parsed.username is not None or parsed.password is not None:
+            raise InvalidUrlError("URLs com credenciais (usuário@host) não são permitidas")
+
     def __str__(self) -> str:
         return self.value

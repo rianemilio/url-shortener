@@ -47,6 +47,12 @@ class RabbitMQPublisher:
         )
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
+    @property
+    def is_connected(self) -> bool:
+        # `is_closed` não serve: na RobustConnection ele fica False enquanto ela tenta
+        # reconectar. O evento `connected` é limpo quando a conexão cai.
+        return self._connection is not None and self._connection.connected.is_set()
+
     async def publish(self, event: DomainEvent) -> None:
         if self._exchange is None:
             raise EventPublisherUnavailableError("RabbitMQ ainda não conectado")

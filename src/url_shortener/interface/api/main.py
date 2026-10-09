@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from url_shortener.bootstrap.container import ApiContainer
-from url_shortener.interface.api.routers import redirect, urls
+from url_shortener.interface.api.routers import health, redirect, urls
 
 
 @asynccontextmanager
@@ -19,11 +19,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="URL Shortener", lifespan=lifespan)
 
-
-@app.get("/health", tags=["health"])
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
+# health antes do redirect: senão GET /health cairia em /{code}.
+app.include_router(health.router)
 app.include_router(urls.router)
 app.include_router(redirect.router)

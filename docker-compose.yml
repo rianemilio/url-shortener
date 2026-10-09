@@ -31,6 +31,7 @@ services:
 
   api:
     build: .
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -48,6 +49,7 @@ services:
 
   worker:
     build: .
+    restart: unless-stopped
     command: ["python", "-m", "url_shortener.interface.worker.click_consumer"]
     environment:
       APP_MONGO_URI: mongodb://mongo:27017
