@@ -1,3 +1,5 @@
+import asyncio
+import signal
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -81,3 +83,50 @@ async def test_requeues_on_transient_failure(monkeypatch: pytest.MonkeyPatch) ->
     message = await _handle(b'{"code": "abc"}', BrokenRepository())
 
     assert message.outcome == "requeue"
+
+
+class FakeQueue:
+    def __init__(self) -> None:
+        self.consuming = asyncio.Event()
+        self.cancelled = False
+
+    async def consume(self, callback: Any) -> str:
+        self.consuming.set()
+        return "consumer-tag"
+
+    async def cancel(self, consumer_tag: str) -> None:
+        self.cancelled = True
+
+
+class FakeChannel:
+    async def set_qos(self, prefetch_count: int) -> None:
+        pass
+
+
+class FakeRunnableWorkerContainer:
+    def __init__(self) -> None:
+        self.url_clicked_queue = FakeQueue()
+        self.rabbitmq_channel = FakeChannel()
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_run_shuts_down_gracefully_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
+    container = FakeRunnableWorkerContainer()
+
+    async def fake_create() -> FakeRunnableWorkerContainer:
+        return container
+
+    monkeypatch.setattr(click_consumer.WorkerContainer, "create", fake_create)
+
+    task = asyncio.create_task(click_consumer.run())
+    # O consume só é chamado depois que os handlers de sinal estão instalados.
+    await asyncio.wait_for(container.url_clicked_queue.consuming.wait(), timeout=1)
+    signal.raise_signal(signal.SIGTERM)
+    await asyncio.wait_for(task, timeout=1)
+
+    assert container.url_clicked_queue.cancelled
+    assert container.closed

@@ -6,13 +6,19 @@ from url_shortener.application.commands.create_short_url import (
 )
 from url_shortener.domain.exceptions import InvalidUrlError
 from url_shortener.interface.api.dependencies import get_create_short_url_handler
+from url_shortener.interface.api.rate_limit import enforce_create_rate_limit
 from url_shortener.interface.api.schemas.create_url_request import CreateUrlRequest
 from url_shortener.interface.api.schemas.create_url_response import CreateUrlResponse
 
 router = APIRouter(tags=["urls"])
 
 
-@router.post("/urls", response_model=CreateUrlResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/urls",
+    response_model=CreateUrlResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(enforce_create_rate_limit)],
+)
 async def create_short_url(
     body: CreateUrlRequest,
     request: Request,

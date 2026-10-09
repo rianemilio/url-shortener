@@ -1,18 +1,19 @@
 import asyncio
 import json
 import logging
+import signal
 
 import aio_pika
 
 from url_shortener.application.commands.register_click import RegisterClickCommand
 from url_shortener.bootstrap.container import WorkerContainer
 from url_shortener.domain.exceptions import DomainError
-from url_shortener.infrastructure.messaging.topology import declare_url_clicked_queue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _TRANSIENT_ERROR_BACKOFF_SECONDS = 1.0
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)
 
 
 class InvalidMessageError(Exception):
@@ -51,15 +52,33 @@ async def _handle_message(
 
 async def run() -> None:
     container = await WorkerContainer.create()
-    queue = await declare_url_clicked_queue(container.rabbitmq_channel, container.rabbitmq_exchange)
+    queue = container.url_clicked_queue
     await container.rabbitmq_channel.set_qos(prefetch_count=10)
 
+    # O worker roda como PID 1 no container, e o kernel ignora SIGTERM no PID 1 sem handler:
+    # sem isto, `docker stop` esperaria o timeout inteiro e mataria o processo com SIGKILL.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in _STOP_SIGNALS:
+        loop.add_signal_handler(sig, stop.set)
+
+    async def on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
+        await _handle_message(message, container)
+
+    consumer_tag = await queue.consume(on_message)
     logger.info("Worker aguardando mensagens em url_clicked_queue...")
     try:
-        async with queue.iterator() as queue_iter:
-            async for message in queue_iter:
-                await _handle_message(message, container)
+        await stop.wait()
+        logger.info("Sinal de parada recebido, encerrando o worker")
     finally:
+        for sig in _STOP_SIGNALS:
+            loop.remove_signal_handler(sig)
+        try:
+            await queue.cancel(consumer_tag)
+        except Exception:
+            # Conexão já caída: não há consumer para cancelar, segue para o close.
+            logger.warning("Falha ao cancelar o consumer", exc_info=True)
+        # Mensagens em processamento que não chegarem ao ack voltam para a fila no close.
         await container.close()
 
 

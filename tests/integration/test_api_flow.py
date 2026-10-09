@@ -102,3 +102,76 @@ async def test_click_count_incremented_by_worker(
 
     mongo_client.close()
     assert click_count == 1
+
+
+async def _delete_clicked_queue(rabbitmq_uri: str) -> None:
+    import aio_pika
+
+    from url_shortener.infrastructure.messaging.topology import URL_CLICKED_QUEUE
+
+    connection = await aio_pika.connect(rabbitmq_uri)
+    async with connection:
+        channel = await connection.channel()
+        await channel.queue_delete(URL_CLICKED_QUEUE)
+
+
+async def _clicked_queue_message_count(rabbitmq_uri: str) -> int:
+    import aio_pika
+
+    from url_shortener.infrastructure.messaging.topology import URL_CLICKED_QUEUE
+
+    connection = await aio_pika.connect(rabbitmq_uri)
+    async with connection:
+        channel = await connection.channel()
+        queue = await channel.declare_queue(URL_CLICKED_QUEUE, passive=True)
+        return queue.declaration_result.message_count or 0
+
+
+@pytest.mark.asyncio
+async def test_api_declares_click_queue_so_events_survive_without_worker(_env, containers) -> None:
+    from url_shortener.interface.api.main import app
+
+    # Simula a API subindo antes da primeira execução do worker: a fila não existe.
+    await _delete_clicked_queue(containers["rabbitmq_uri"])
+
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create_response = await client.post("/urls", json={"url": "https://example.com/nw"})
+            await client.get(f"/{create_response.json()['code']}", follow_redirects=False)
+
+    message_count = 0
+    for _ in range(20):
+        message_count = await _clicked_queue_message_count(containers["rabbitmq_uri"])
+        if message_count:
+            break
+        await asyncio.sleep(0.25)
+    assert message_count == 1
+
+
+@pytest.mark.asyncio
+async def test_create_is_rate_limited_per_client(_env, containers, monkeypatch) -> None:
+    from redis.asyncio import Redis
+
+    from url_shortener.config import get_settings
+    from url_shortener.interface.api.main import app
+
+    redis = Redis.from_url(containers["redis_uri"])
+    async for key in redis.scan_iter("rate_limit:*"):
+        await redis.delete(key)
+    await redis.aclose()
+
+    monkeypatch.setenv("APP_RATE_LIMIT_CREATE_REQUESTS", "2")
+    get_settings.cache_clear()
+
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            statuses = [
+                (await client.post("/urls", json={"url": "https://example.com/rl"})).status_code
+                for _ in range(3)
+            ]
+            limited = await client.post("/urls", json={"url": "https://example.com/rl"})
+
+    assert statuses == [201, 201, 429]
+    assert 0 < int(limited.headers["retry-after"]) <= 60

@@ -59,6 +59,23 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   cai entre o `$inc` e o ack) conta o clique duas vezes. Deduplicar exigiria um
   id por evento e um registro de eventos processados, um custo que não se paga
   para um contador de cliques.
+- **RabbitMQ não é obrigatório para a API**: se o broker estiver fora na
+  subida, a API sobe mesmo assim e o publisher tenta reconectar em background
+  (`APP_RABBITMQ_RECONNECT_INTERVAL_SECONDS`). Até lá, os eventos falham rápido
+  e são logados; o redirect continua funcionando. A API e o worker declaram a
+  mesma topologia (exchange, fila de cliques e DLQ), então cliques publicados
+  antes da primeira subida do worker ficam na fila em vez de serem descartados.
+- **Timeouts explícitos**: Mongo (`APP_MONGO_TIMEOUT_MS`, 2s), Redis
+  (`APP_REDIS_TIMEOUT_SECONDS`, 0,5s) e RabbitMQ (`APP_RABBITMQ_TIMEOUT_SECONDS`,
+  2s). Sem eles, um serviço travado (que não recusa a conexão, só não
+  responde) prende a requisição indefinidamente (Redis) ou por 30s (Mongo).
+- **Rate limit na criação**: `POST /urls` aceita até
+  `APP_RATE_LIMIT_CREATE_REQUESTS` chamadas por IP a cada
+  `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (padrão 20/min); acima disso responde
+  `429` com `Retry-After`. O contador fica no Redis (janela fixa) para valer
+  entre várias instâncias da API. Se o Redis falhar, a requisição passa: ele
+  segue sendo acessório. Atrás de um proxy reverso, o IP visto é o do proxy:
+  seria preciso rodar o uvicorn com `--proxy-headers --forwarded-allow-ips`.
 
 ## Rodando com Docker Compose
 

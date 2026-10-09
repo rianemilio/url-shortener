@@ -11,12 +11,13 @@ from url_shortener.infrastructure.cache.redis_cache import RedisCache
 from url_shortener.infrastructure.cache.redis_client import create_redis_client
 from url_shortener.infrastructure.messaging.rabbitmq_connection import create_rabbitmq_connection
 from url_shortener.infrastructure.messaging.rabbitmq_publisher import RabbitMQPublisher
-from url_shortener.infrastructure.messaging.topology import declare_events_exchange
+from url_shortener.infrastructure.messaging.topology import declare_topology
 from url_shortener.infrastructure.persistence.counter.mongo_counter_code_generator import (
     MongoCounterCodeGenerator,
 )
 from url_shortener.infrastructure.persistence.mongo.client import create_mongo_client, get_database
 from url_shortener.infrastructure.persistence.mongo.mongo_url_repository import MongoUrlRepository
+from url_shortener.infrastructure.rate_limit.redis_rate_limiter import RedisRateLimiter
 
 
 class ApiContainer:
@@ -27,18 +28,16 @@ class ApiContainer:
         settings: Settings,
         mongo_client: AsyncIOMotorClient,
         redis_client: Redis,
-        rabbitmq_connection: aio_pika.abc.AbstractRobustConnection,
-        rabbitmq_exchange: aio_pika.abc.AbstractExchange,
+        event_publisher: RabbitMQPublisher,
     ) -> None:
         self.settings = settings
         self.mongo_client = mongo_client
         self.redis_client = redis_client
-        self.rabbitmq_connection = rabbitmq_connection
+        self.event_publisher = event_publisher
 
         database = get_database(mongo_client, settings)
         url_repository = MongoUrlRepository(database)
         cache = RedisCache(redis_client, settings.redis_cache_ttl_seconds)
-        event_publisher = RabbitMQPublisher(rabbitmq_exchange)
 
         self.create_short_url_handler = CreateShortUrlCommandHandler(
             url_repository=url_repository,
@@ -51,25 +50,30 @@ class ApiContainer:
             cache=cache,
         )
         self.track_click_handler = TrackClickCommandHandler(event_publisher=event_publisher)
+        self.create_rate_limiter = RedisRateLimiter(
+            redis_client,
+            scope="create_url",
+            limit=settings.rate_limit_create_requests,
+            window_seconds=settings.rate_limit_create_window_seconds,
+        )
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> "ApiContainer":
         settings = settings or get_settings()
 
-        rabbitmq_connection = await create_rabbitmq_connection(settings)
-        rabbitmq_channel = await rabbitmq_connection.channel()
-        rabbitmq_exchange = await declare_events_exchange(rabbitmq_channel)
+        # Não bloqueia a subida se o RabbitMQ estiver fora: o publisher reconecta em background.
+        event_publisher = RabbitMQPublisher(settings)
+        await event_publisher.start()
 
         return cls(
             settings=settings,
             mongo_client=create_mongo_client(settings),
             redis_client=create_redis_client(settings),
-            rabbitmq_connection=rabbitmq_connection,
-            rabbitmq_exchange=rabbitmq_exchange,
+            event_publisher=event_publisher,
         )
 
     async def close(self) -> None:
-        await self.rabbitmq_connection.close()
+        await self.event_publisher.close()
         await self.redis_client.aclose()
         self.mongo_client.close()
 
@@ -83,13 +87,13 @@ class WorkerContainer:
         mongo_client: AsyncIOMotorClient,
         rabbitmq_connection: aio_pika.abc.AbstractRobustConnection,
         rabbitmq_channel: aio_pika.abc.AbstractChannel,
-        rabbitmq_exchange: aio_pika.abc.AbstractExchange,
+        url_clicked_queue: aio_pika.abc.AbstractQueue,
     ) -> None:
         self.settings = settings
         self.mongo_client = mongo_client
         self.rabbitmq_connection = rabbitmq_connection
         self.rabbitmq_channel = rabbitmq_channel
-        self.rabbitmq_exchange = rabbitmq_exchange
+        self.url_clicked_queue = url_clicked_queue
 
         database = get_database(mongo_client, settings)
         self.register_click_handler = RegisterClickCommandHandler(
@@ -102,14 +106,14 @@ class WorkerContainer:
 
         rabbitmq_connection = await create_rabbitmq_connection(settings)
         rabbitmq_channel = await rabbitmq_connection.channel()
-        rabbitmq_exchange = await declare_events_exchange(rabbitmq_channel)
+        topology = await declare_topology(rabbitmq_channel)
 
         return cls(
             settings=settings,
             mongo_client=create_mongo_client(settings),
             rabbitmq_connection=rabbitmq_connection,
             rabbitmq_channel=rabbitmq_channel,
-            rabbitmq_exchange=rabbitmq_exchange,
+            url_clicked_queue=topology.url_clicked_queue,
         )
 
     async def close(self) -> None:
