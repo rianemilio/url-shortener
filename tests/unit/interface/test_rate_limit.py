@@ -2,7 +2,7 @@ from collections import Counter
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from tests.fakes.fake_cache import FakeCache
 from tests.fakes.fake_code_generator import FakeCodeGenerator
@@ -14,6 +14,7 @@ from url_shortener.application.commands.track_click import TrackClickCommandHand
 from url_shortener.application.queries.get_original_url import GetOriginalUrlQueryHandler
 from url_shortener.config import Settings
 from url_shortener.infrastructure.rate_limit.redis_rate_limiter import RateLimitDecision
+from url_shortener.interface.api.rate_limit import client_key
 from url_shortener.interface.api.routers import redirect, urls
 
 
@@ -95,6 +96,22 @@ async def test_limits_per_client_ip() -> None:
         await _create(client)
 
     assert list(limiter.hits) == ["127.0.0.1"]
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("203.0.113.7", "203.0.113.7"),
+        ("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"),
+        ("2001:db8:1:2::1", "2001:db8:1:2::/64"),
+        ("::ffff:203.0.113.7", "203.0.113.7"),
+        ("testclient", "testclient"),
+    ],
+)
+def test_client_key_groups_ipv6_by_64(host: str, expected: str) -> None:
+    request = Request({"type": "http", "client": (host, 12345)})
+
+    assert client_key(request) == expected
 
 
 @pytest.mark.asyncio

@@ -149,6 +149,11 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   confia nele quando a conexão vem de um IP listado em `FORWARDED_ALLOW_IPS`
   (padrão `127.0.0.1`). Atrás de um proxy reverso, defina essa variável com o IP
   do proxy, ou os dois rate limits vão tratar todos os clientes como um só.
+- **IPv6 limitado por /64**: os rate limits contam o IPv4 do cliente, mas no
+  IPv6 contam o prefixo /64 inteiro. Um /64 é o que o provedor entrega a um
+  único cliente, que pode trocar de endereço dentro dele à vontade: limitar por
+  endereço individual não limitaria ninguém. IPv4 mapeado em IPv6
+  (`::ffff:203.0.113.7`) conta como o IPv4.
 
 ## Rodando com Docker Compose
 
