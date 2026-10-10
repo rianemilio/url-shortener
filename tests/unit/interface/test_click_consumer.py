@@ -5,9 +5,14 @@ from typing import Any, cast
 
 import pytest
 
+from tests.fakes.fake_event_publisher import FakeEventPublisher
 from tests.fakes.fake_url_repository import FakeUrlRepository
+from url_shortener.application.commands.publish_pending_events import (
+    PublishPendingEventsCommandHandler,
+)
 from url_shortener.application.commands.register_click import RegisterClickCommandHandler
 from url_shortener.bootstrap.container import WorkerContainer
+from url_shortener.config import Settings
 from url_shortener.domain.entities.short_url import ShortUrl
 from url_shortener.domain.value_objects.original_url import OriginalUrl
 from url_shortener.domain.value_objects.short_code import ShortCode
@@ -135,6 +140,12 @@ class FakeRunnableWorkerContainer:
         self.url_clicked_queue = FakeQueue()
         self.rabbitmq_channel = FakeChannel()
         self.closed = False
+        self.settings = Settings()
+        repo = FakeUrlRepository()
+        self.url_created_outbox = repo
+        self.publish_pending_events_handler = PublishPendingEventsCommandHandler(
+            outbox=repo, event_publisher=FakeEventPublisher()
+        )
 
     async def close(self) -> None:
         self.closed = True

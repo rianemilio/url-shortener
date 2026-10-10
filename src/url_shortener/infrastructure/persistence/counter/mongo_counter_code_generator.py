@@ -11,8 +11,9 @@ from url_shortener.infrastructure.persistence.mongo.models import (
 
 
 class MongoCounterCodeGenerator:
-    def __init__(self, database: AsyncIOMotorDatabase) -> None:
+    def __init__(self, database: AsyncIOMotorDatabase, secret: bytes) -> None:
         self._collection = database[COUNTERS_COLLECTION]
+        self._secret = secret
 
     async def next_code(self) -> ShortCode:
         with translate_connection_errors():
@@ -22,4 +23,4 @@ class MongoCounterCodeGenerator:
                 upsert=True,
                 return_document=ReturnDocument.AFTER,
             )
-        return ShortCode(code_scrambler.scramble(document["seq"]))
+        return ShortCode(code_scrambler.scramble(document["seq"], self._secret))

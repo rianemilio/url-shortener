@@ -23,5 +23,10 @@ class OriginalUrl:
         if parsed.username is not None or parsed.password is not None:
             raise InvalidUrlError("URLs com credenciais (usuário@host) não são permitidas")
 
+    @property
+    def host(self) -> str:
+        """Hostname normalizado (minúsculo, sem porta e sem o ponto final de FQDN)."""
+        return (urlparse(self.value).hostname or "").rstrip(".")
+
     def __str__(self) -> str:
         return self.value

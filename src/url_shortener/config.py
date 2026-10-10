@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,16 @@ class Settings(BaseSettings):
 
     rate_limit_create_requests: int = 20
     rate_limit_create_window_seconds: int = 60
+    # Conta só os redirects que dão 404: quem varre códigos erra quase sempre.
+    rate_limit_redirect_miss_requests: int = 30
+    rate_limit_redirect_miss_window_seconds: int = 60
+
+    # Chave da permutação que embaralha o contador (`domain/services/code_scrambler.py`).
+    # Sem default de propósito: uma chave conhecida tornaria os códigos enumeráveis.
+    code_secret: SecretStr = Field(min_length=16)
+
+    outbox_poll_interval_seconds: float = 1.0
+    outbox_batch_size: int = 100
 
     base_url: str = "http://localhost:8000"
 
@@ -28,4 +39,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # code_secret vem do ambiente; o mypy não sabe disso e cobraria o argumento.
+    return Settings()  # type: ignore[call-arg]

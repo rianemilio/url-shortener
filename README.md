@@ -31,13 +31,19 @@ os adapters em `infrastructure/**` as implementam por structural typing.
 - **Geração de código curto**: contador atômico no MongoDB (`findOneAndUpdate`
   com `$inc`), embaralhado e convertido para base62 com 7 caracteres. Como o
   Mongo é a única fonte de verdade (inclusive do contador) e a sequência é
-  estritamente crescente, não há necessidade de retry por colisão, diferente
-  de estratégias baseadas em hash ou valores aleatórios.
-- **Códigos não enumeráveis**: o contador passa por `n * K mod 62^7`, com `K`
-  coprimo com `62^7` (`domain/services/code_scrambler.py`). Isso é uma bijeção,
-  então continua sem colisão, mas `/1`, `/2`, `/3`... deixam de listar todas as
-  URLs. Não é criptografia: é ofuscação suficiente para impedir varredura
-  trivial. O espaço comporta ~3,5 trilhões de códigos.
+  estritamente crescente, em operação normal não há colisão, diferente de
+  estratégias baseadas em hash ou valores aleatórios. Se mesmo assim o código já
+  existir (chave trocada ou contador resetado), o `_id` duplicado vira
+  `ShortCodeConflictError` e o caso de uso tenta outro código, até 3 vezes.
+- **Códigos não enumeráveis**: o contador passa por uma rede de Feistel com
+  chave secreta (`APP_CODE_SECRET`) sobre o domínio exato `[0, 62^7)`
+  (`domain/services/code_scrambler.py`). É uma bijeção, então continua sem
+  colisão, e sem a chave os códigos já vistos não ajudam a prever os próximos.
+  Uma versão anterior usava `n * K mod 62^7`, que é linear: dois códigos
+  consecutivos diferiam sempre por `K`, então duas criações bastavam para
+  enumerar tudo. A chave é obrigatória e não tem default. Trocá-la não invalida
+  os links existentes (o código é gravado, não recalculado), só muda os
+  próximos. O espaço comporta ~3,5 trilhões de códigos.
 - **Redis é só cache**: nunca guarda dado que não possa ser reconstruído a
   partir do Mongo. Se cair, o sistema continua funcionando (com mais leituras
   no Mongo); falhas de leitura e escrita no cache são logadas e ignoradas.
@@ -48,8 +54,18 @@ os adapters em `infrastructure/**` as implementam por structural typing.
 - **Eventos com consumidor de verdade**: o evento `URLClicked` é
   publicado no redirect (sem bloquear a resposta) e consumido por um worker
   separado que incrementa `click_count` no Mongo: dá uso genuíno ao RabbitMQ
-  sem virar uma feature completa de analytics. O evento `URLCreated` é
-  publicado para uma extensão futura (hoje sem consumidor).
+  sem virar uma feature completa de analytics. O evento `URLCreated` existe para
+  uma extensão futura (hoje sem consumidor).
+- **`URLCreated` via transactional outbox**: publicar direto depois do `insert`
+  perderia o evento sempre que o broker estivesse fora. Em vez disso, o documento
+  da URL já é gravado com `url_created_pending: true` na mesma escrita, então é
+  atômico sem precisar de transação (que no Mongo exigiria replica set). Um relay
+  no worker (`interface/worker/outbox_relay.py`) busca os pendentes por um índice
+  parcial, publica e só então remove o campo. Entrega *at-least-once*: se o
+  worker cair entre o publish e a marcação, o evento sai de novo, então
+  consumidores de `URLCreated` precisam ser idempotentes (o `code` serve de
+  chave). Com mais de uma réplica do worker, o mesmo evento também pode sair
+  duas vezes.
 - **Erros no worker**: mensagens que nunca vão dar certo (JSON inválido, sem
   `code`, código fora do formato) são rejeitadas sem requeue e vão para a DLQ
   `url_clicked_queue.dlq`. Falhas transitórias (ex.: Mongo fora do ar) voltam
@@ -74,7 +90,9 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   2s). Sem eles, um serviço travado (que não recusa a conexão, só não
   responde) prende a requisição indefinidamente (Redis) ou por 30s (Mongo).
 - **Validação de URL contra phishing**: URLs com credenciais
-  (`https://google.com@evil.com`, cujo host real é `evil.com`) são rejeitadas.
+  (`https://google.com@evil.com`, cujo host real é `evil.com`) são rejeitadas,
+  assim como links para o host do próprio encurtador (o de `APP_BASE_URL`), que
+  só serviriam para esconder o destino atrás de uma cadeia de redirects.
 - **Mongo fora do ar responde `503`, não `500`**: os adapters do Mongo
   convertem falhas de conexão em `StorageUnavailableError` (camada de
   aplicação, sem depender do pymongo) e a API responde `503` com
@@ -88,13 +106,25 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (padrão 20/min); acima disso responde
   `429` com `Retry-After`. O contador fica no Redis (janela fixa) para valer
   entre várias instâncias da API. Se o Redis falhar, a requisição passa: ele
-  segue sendo acessório. Atrás de um proxy reverso, o IP visto é o do proxy:
-  seria preciso rodar o uvicorn com `--proxy-headers --forwarded-allow-ips`.
+  segue sendo acessório.
+- **Rate limit de códigos inexistentes**: cada redirect que dá `404` conta para
+  o IP (`APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS` por
+  `APP_RATE_LIMIT_REDIRECT_MISS_WINDOW_SECONDS`, padrão 30/min). Passado o
+  limite, o IP recebe `429` em qualquer redirect, inclusive de códigos válidos,
+  e a consulta é barrada antes de chegar ao Mongo. Quem só acessa links válidos
+  nunca é limitado. Isso custa uma leitura extra no Redis por redirect. Cache
+  negativo não resolveria: quem varre códigos aleatórios não repete código.
+- **IP do cliente atrás de proxy**: o uvicorn já lê `X-Forwarded-For`, mas só
+  confia nele quando a conexão vem de um IP listado em `FORWARDED_ALLOW_IPS`
+  (padrão `127.0.0.1`). Atrás de um proxy reverso, defina essa variável com o IP
+  do proxy, ou os dois rate limits vão tratar todos os clientes como um só.
 
 ## Rodando com Docker Compose
 
 ```bash
 cp .env.example .env
+# em produção, defina APP_CODE_SECRET no .env (openssl rand -hex 32); sem ela, o
+# compose usa uma chave de desenvolvimento
 docker compose up --build
 ```
 
@@ -128,6 +158,8 @@ integração.
 
 ```bash
 uv sync
+# Para subir API/worker fora do compose (os testes já usam uma chave própria):
+export APP_CODE_SECRET=$(openssl rand -hex 32)   # ou defina no .env
 uv run pytest              # testes unitários (rápidos, sem Docker)
 uv run pytest -m integration  # teste de integração ponta a ponta (requer Docker)
 uv run ruff check .

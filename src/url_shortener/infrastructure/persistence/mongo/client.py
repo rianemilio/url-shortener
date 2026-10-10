@@ -10,6 +10,8 @@ def create_mongo_client(settings: Settings) -> AsyncIOMotorClient:
         serverSelectionTimeoutMS=settings.mongo_timeout_ms,
         connectTimeoutMS=settings.mongo_timeout_ms,
         socketTimeoutMS=settings.mongo_timeout_ms,
+        # Datas voltam com fuso (UTC), iguais às que o domínio grava com datetime.now(UTC).
+        tz_aware=True,
     )
 
 

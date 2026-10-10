@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import logging
 import signal
@@ -10,6 +11,7 @@ from url_shortener.bootstrap.container import WorkerContainer
 from url_shortener.config import get_settings
 from url_shortener.domain.exceptions import DomainError
 from url_shortener.infrastructure.messaging.topology import MAX_DELIVERY_RETRIES
+from url_shortener.interface.worker.outbox_relay import run_outbox_relay
 from url_shortener.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -89,11 +91,17 @@ async def run() -> None:
         await _handle_message(message, container)
 
     consumer_tag = await queue.consume(on_message)
+    relay_task = asyncio.create_task(run_outbox_relay(container, stop))
     logger.info("Worker aguardando mensagens em url_clicked_queue...")
     try:
         await stop.wait()
         logger.info("Sinal de parada recebido, encerrando o worker")
     finally:
+        # Normalmente o relay já saiu sozinho com o `stop`; o cancel cobre o caso de o
+        # `run()` ter sido cancelado de fora (ex.: nos testes).
+        relay_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await relay_task
         for sig in _STOP_SIGNALS:
             loop.remove_signal_handler(sig)
         try:

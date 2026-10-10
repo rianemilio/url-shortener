@@ -46,3 +46,15 @@ def test_short_code_accepts_base62_values(value: str) -> None:
 def test_short_code_rejects_invalid_values(value: str) -> None:
     with pytest.raises(InvalidShortCodeError):
         ShortCode(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "host"),
+    [
+        ("https://Example.COM/path", "example.com"),
+        ("http://example.com:8080", "example.com"),
+        ("https://example.com./x", "example.com"),
+    ],
+)
+def test_original_url_exposes_normalized_host(value: str, host: str) -> None:
+    assert OriginalUrl(value).host == host

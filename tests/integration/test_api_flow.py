@@ -228,3 +228,81 @@ async def test_readiness_reports_all_dependencies_up(app_client: httpx.AsyncClie
         "status": "ok",
         "checks": {"mongo": "ok", "redis": "ok", "rabbitmq": "ok"},
     }
+
+
+@pytest.mark.asyncio
+async def test_url_created_is_published_by_outbox_relay(
+    app_client: httpx.AsyncClient, running_worker, containers
+) -> None:
+    import json
+
+    import aio_pika
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    from url_shortener.config import get_settings
+    from url_shortener.infrastructure.messaging.topology import EVENTS_EXCHANGE
+
+    connection = await aio_pika.connect(containers["rabbitmq_uri"])
+    async with connection:
+        channel = await connection.channel()
+        exchange = await channel.get_exchange(EVENTS_EXCHANGE)
+        queue = await channel.declare_queue(exclusive=True)
+        await queue.bind(exchange, routing_key="url.created")
+
+        create_response = await app_client.post("/urls", json={"url": "https://example.com/ob"})
+        code = create_response.json()["code"]
+
+        message = None
+        for _ in range(40):
+            message = await queue.get(fail=False)
+            if message is not None:
+                break
+            await asyncio.sleep(0.25)
+
+    assert message is not None
+    payload = json.loads(message.body)
+    assert payload["code"] == code
+    assert payload["original_url"] == "https://example.com/ob"
+
+    # Publicado, o evento deixa de estar pendente no documento.
+    settings = get_settings()
+    mongo_client = AsyncIOMotorClient(settings.mongo_uri)
+    document = None
+    for _ in range(20):
+        document = await mongo_client[settings.mongo_db_name]["urls"].find_one({"_id": code})
+        if document is not None and "url_created_pending" not in document:
+            break
+        await asyncio.sleep(0.25)
+    mongo_client.close()
+    assert document is not None and "url_created_pending" not in document
+
+
+@pytest.mark.asyncio
+async def test_redirect_is_blocked_after_too_many_missing_codes(
+    _env, containers, monkeypatch
+) -> None:
+    from redis.asyncio import Redis
+
+    from url_shortener.config import get_settings
+    from url_shortener.interface.api.main import app
+
+    redis = Redis.from_url(containers["redis_uri"])
+    async for key in redis.scan_iter("rate_limit:*"):
+        await redis.delete(key)
+    await redis.aclose()
+
+    monkeypatch.setenv("APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS", "2")
+    get_settings.cache_clear()
+
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            code = (await client.post("/urls", json={"url": "https://example.com/m"})).json()[
+                "code"
+            ]
+            statuses = [(await client.get(f"/zzzzzz{i}")).status_code for i in range(3)]
+            valid_after_block = await client.get(f"/{code}", follow_redirects=False)
+
+    assert statuses == [404, 404, 429]
+    # O bloqueio vale para o IP, inclusive em códigos válidos: quem varre não ganha atalho.
+    assert valid_after_block.status_code == 429

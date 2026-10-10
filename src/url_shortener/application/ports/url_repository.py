@@ -5,7 +5,10 @@ from url_shortener.domain.value_objects.short_code import ShortCode
 
 
 class UrlRepositoryPort(Protocol):
-    async def save(self, short_url: ShortUrl) -> None: ...
+    async def save(self, short_url: ShortUrl) -> None:
+        """Persiste a URL e, na mesma escrita atômica, marca `URLCreated` como pendente de
+        publicação (outbox). Levanta `ShortCodeConflictError` se o código já existir."""
+        ...
 
     async def find_by_code(self, code: ShortCode) -> ShortUrl | None: ...
 
