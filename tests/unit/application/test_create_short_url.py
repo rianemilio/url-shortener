@@ -114,3 +114,19 @@ async def test_gives_up_after_repeated_conflicts() -> None:
     with pytest.raises(ShortCodeConflictError):
         await handler.handle(CreateShortUrlCommand(url="https://example.com/new"))
     assert "d" not in repo.saved
+
+
+@pytest.mark.asyncio
+async def test_skips_codes_reserved_for_api_routes() -> None:
+    repo = FakeUrlRepository()
+    handler = CreateShortUrlCommandHandler(
+        url_repository=repo,
+        cache=FakeCache(),
+        code_generator=ScriptedCodeGenerator(["metrics", "health", "free"]),
+        reserved_codes=["metrics", "health"],
+    )
+
+    result = await handler.handle(CreateShortUrlCommand(url="https://example.com"))
+
+    assert str(result.code) == "free"
+    assert list(repo.saved) == ["free"]

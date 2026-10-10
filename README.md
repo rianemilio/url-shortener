@@ -35,6 +35,9 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   estratégias baseadas em hash ou valores aleatórios. Se mesmo assim o código já
   existir (chave trocada ou contador resetado), o `_id` duplicado vira
   `ShortCodeConflictError` e o caso de uso tenta outro código, até 3 vezes.
+  Códigos iguais a uma rota fixa da API (`health`, `urls`, `docs`...) também são
+  pulados: essas rotas são casadas antes de `/{code}`, e o link ficaria
+  inacessível. A lista é derivada das rotas registradas, então cobre as futuras.
 - **Códigos não enumeráveis**: o contador passa por uma rede de Feistel com
   chave secreta (`APP_CODE_SECRET`) sobre o domínio exato `[0, 62^7)`
   (`domain/services/code_scrambler.py`). É uma bijeção, então continua sem

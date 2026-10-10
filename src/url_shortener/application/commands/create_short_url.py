@@ -10,6 +10,7 @@ from url_shortener.application.ports.url_repository import UrlRepositoryPort
 from url_shortener.domain.entities.short_url import ShortUrl
 from url_shortener.domain.exceptions import InvalidUrlError
 from url_shortener.domain.value_objects.original_url import OriginalUrl
+from url_shortener.domain.value_objects.short_code import ShortCode
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,13 @@ class CreateShortUrlCommandHandler:
         cache: CachePort,
         code_generator: CodeGeneratorPort,
         blocked_hosts: Iterable[str] = (),
+        reserved_codes: Iterable[str] = (),
     ) -> None:
         self._url_repository = url_repository
         self._cache = cache
         self._code_generator = code_generator
         self._blocked_hosts = frozenset(host.lower().rstrip(".") for host in blocked_hosts)
+        self._reserved_codes = frozenset(reserved_codes)
 
     async def handle(self, command: CreateShortUrlCommand) -> ShortUrl:
         original_url = OriginalUrl(command.url)
@@ -58,7 +61,7 @@ class CreateShortUrlCommandHandler:
     async def _save_with_fresh_code(self, original_url: OriginalUrl) -> ShortUrl:
         for attempt in range(1, _MAX_CODE_ATTEMPTS + 1):
             short_url = ShortUrl(
-                code=await self._code_generator.next_code(),
+                code=await self._next_unreserved_code(),
                 original_url=original_url,
                 created_at=datetime.now(UTC),
             )
@@ -80,3 +83,11 @@ class CreateShortUrlCommandHandler:
             _MAX_CODE_ATTEMPTS,
         )
         raise ShortCodeConflictError("Não foi possível gerar um código curto livre")
+
+    async def _next_unreserved_code(self) -> ShortCode:
+        # Termina: o gerador nunca repete código, e os reservados são poucos e fixos.
+        while True:
+            code = await self._code_generator.next_code()
+            if str(code) not in self._reserved_codes:
+                return code
+            logger.info("Código %s coincide com uma rota da API; gerando outro", code)

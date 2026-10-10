@@ -12,6 +12,26 @@ from url_shortener.logging_config import configure_logging
 from url_shortener.metrics import MetricsServer
 
 
+def reserved_codes(app: FastAPI) -> frozenset[str]:
+    """Caminhos fixos de um segmento só (`/health`, `/urls`, `/docs`...).
+
+    Essas rotas são casadas antes de `/{code}`, então um código curto igual a uma delas
+    ficaria inacessível. Derivado das rotas registradas, cobre também as que vierem depois.
+
+    As rotas dos routers incluídos vêm do schema OpenAPI (API pública): o FastAPI guarda
+    esses routers em estruturas internas, sem `path`, em `app.routes`. As rotas que ficam
+    fora do schema (`/docs`, `/redoc`) estão direto em `app.routes`. Uma rota futura com
+    `include_in_schema=False` dentro de um router escaparia: o teste das rotas reservadas
+    precisa ser atualizado junto.
+    """
+    paths = set(app.openapi()["paths"]) | {getattr(route, "path", "") for route in app.routes}
+    return frozenset(
+        path.strip("/")
+        for path in paths
+        if path.count("/") == 1 and len(path) > 1 and "{" not in path
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
@@ -19,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     metrics_server = MetricsServer(settings.metrics_port)
     app.state.metrics_server = metrics_server
     try:
-        container = await ApiContainer.create(settings)
+        container = await ApiContainer.create(settings, reserved_codes=reserved_codes(app))
         app.state.container = container
         try:
             yield

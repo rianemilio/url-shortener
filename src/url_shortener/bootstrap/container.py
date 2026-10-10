@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from urllib.parse import urlparse
 
 import aio_pika
@@ -37,6 +38,7 @@ class ApiContainer:
         mongo_client: AsyncIOMotorClient,
         redis_client: Redis,
         event_publisher: RabbitMQPublisher,
+        reserved_codes: Iterable[str] = (),
     ) -> None:
         self.settings = settings
         self.mongo_client = mongo_client
@@ -54,6 +56,7 @@ class ApiContainer:
                 database, settings.code_secret.get_secret_value().encode()
             ),
             blocked_hosts=[urlparse(settings.base_url).hostname or ""],
+            reserved_codes=reserved_codes,
         )
         self.get_original_url_handler = GetOriginalUrlQueryHandler(
             url_repository=url_repository,
@@ -74,7 +77,9 @@ class ApiContainer:
         )
 
     @classmethod
-    async def create(cls, settings: Settings | None = None) -> "ApiContainer":
+    async def create(
+        cls, settings: Settings | None = None, reserved_codes: Iterable[str] = ()
+    ) -> "ApiContainer":
         settings = settings or get_settings()
 
         # Não bloqueia a subida se o RabbitMQ estiver fora: o publisher reconecta em background.
@@ -86,6 +91,7 @@ class ApiContainer:
             mongo_client=create_mongo_client(settings),
             redis_client=create_redis_client(settings),
             event_publisher=event_publisher,
+            reserved_codes=reserved_codes,
         )
 
     async def close(self) -> None:

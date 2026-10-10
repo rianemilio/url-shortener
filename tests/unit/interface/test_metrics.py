@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 
 from tests.metrics_helpers import sample
 from url_shortener.interface.api.main import app as real_app
+from url_shortener.interface.api.main import reserved_codes
 from url_shortener.interface.api.metrics import HttpMetricsMiddleware
 from url_shortener.metrics import MetricsServer
 
@@ -95,3 +96,10 @@ def test_metrics_server_serves_prometheus_format_on_its_own_port() -> None:
 
 def test_api_has_no_metrics_route_on_the_public_port() -> None:
     assert "/metrics" not in {getattr(route, "path", "") for route in real_app.routes}
+
+
+def test_reserved_codes_are_the_fixed_single_segment_routes() -> None:
+    codes = reserved_codes(real_app)
+
+    assert {"health", "urls", "docs", "redoc"} <= codes
+    assert not any("{" in code or "/" in code for code in codes)
