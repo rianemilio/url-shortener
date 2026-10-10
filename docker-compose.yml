@@ -97,5 +97,44 @@ services:
       rabbitmq:
         condition: service_healthy
 
+  # Observabilidade (só desenvolvimento): o Prometheus coleta o /metrics da API, do worker
+  # e do RabbitMQ a cada 5s e guarda o histórico; o Grafana desenha os gráficos.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Histórico curto: é para acompanhar experimentos, não para guardar meses.
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+      - worker
+      - rabbitmq
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      # Sem login e com permissão de edição: aceitável só porque a porta fica no localhost.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/url-shortener.json
+    volumes:
+      # Só as subpastas usadas: montar a pasta inteira esconderia as outras (plugins,
+      # alerting) que o Grafana espera encontrar.
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   mongo_data:
+  prometheus_data:

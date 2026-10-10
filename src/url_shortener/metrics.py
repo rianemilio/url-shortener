@@ -44,6 +44,7 @@ CLICK_MESSAGES = Counter(
     "Mensagens de clique processadas pelo worker (registered, requeued, dead_lettered)",
     ["outcome"],
 )
+# Só o worker atualiza; a API também a exporta (fixa em 0) por compartilhar este módulo.
 OUTBOX_PENDING = Gauge(
     "url_shortener_outbox_pending_events",
     "Eventos URLCreated gravados e ainda não publicados (medido a cada heartbeat do worker)",

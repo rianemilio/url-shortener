@@ -150,8 +150,9 @@ cp .env.example .env
 # compose usa uma chave de desenvolvimento
 docker compose up --build
 ```
-Sobe `api` (porta 8000), `worker`, `mongo`, `redis` e `rabbitmq` (painel de
-management em `localhost:15672`, usuário/senha `guest`/`guest`).
+Sobe `api` (porta 8000), `worker`, `mongo`, `redis`, `rabbitmq` (painel de
+management em `localhost:15672`, usuário/senha `guest`/`guest`), `prometheus` e
+`grafana` (ver [Observabilidade](#observabilidade-prometheus-e-grafana)).
 `api` e `worker` usam `restart: unless-stopped`: se o processo cair, voltam
 sozinhos.
 
@@ -177,6 +178,54 @@ incrementado pelo worker. Confirme com:
 ```bash
 docker compose exec mongo mongosh url_shortener --eval 'db.urls.find()'
 ```
+
+## Observabilidade: Prometheus e Grafana
+
+O compose também sobe:
+
+- **Prometheus** (`localhost:9090`): a cada 5s coleta o `/metrics` da API, do
+  worker (porta 9100) e do RabbitMQ (plugin `rabbitmq_prometheus`, porta 15692)
+  e guarda o histórico por 7 dias (`observability/prometheus.yml`). Em
+  *Status → Targets* dá para ver se os três estão `UP`.
+- **Grafana** (`localhost:3000`): abre direto no dashboard *URL Shortener*, sem
+  login. O datasource e o dashboard são provisionados a partir de
+  `observability/grafana/`. Alterações feitas no navegador somem ao recriar o
+  container: para manter, exporte o JSON (*Share → Export*) e salve em
+  `observability/grafana/dashboards/url-shortener.json`.
+
+Os dois ficam só no `127.0.0.1`, e o Grafana roda sem login e com permissão de
+edição: configuração de desenvolvimento, não de produção.
+
+O dashboard tem quatro blocos: **saúde** (API, worker e RabbitMQ sendo
+coletados, taxa de cache hit, outbox pendente), **tráfego** (redirects por
+status, requisições e latência p95 por rota, cache hit/miss/erro), **proteção**
+(429 por limite) e **eventos e filas** (publicados e falhas, desfecho das
+mensagens de clique, outbox pendente e mensagens nas filas do RabbitMQ).
+
+Os gráficos mostram taxas (`rate()`), que precisam de tráfego contínuo: uma
+rajada de requisições antes da primeira coleta não aparece. Para gerar tráfego:
+
+```bash
+while true; do
+  code=$(curl -s -X POST localhost:8000/urls -H "Content-Type: application/json" \
+    -d "{\"url\": \"https://example.com/$RANDOM\"}" | sed 's/.*"code":"\([^"]*\)".*/\1/')
+  for _ in 1 2 3; do curl -s -o /dev/null "localhost:8000/$code"; done
+  sleep 1
+done
+```
+
+Experimentos para ver os gráficos reagirem, com o gerador rodando:
+
+- `docker compose stop rabbitmq`: *Outbox pendente* sobe a cada URL criada e
+  aparecem falhas de publicação de `url.clicked`. Os redirects seguem
+  funcionando. Com `docker compose start rabbitmq`, o outbox volta a zero.
+- `docker compose stop worker`: a fila `url_clicked_queue` acumula os cliques;
+  com `start`, ela esvazia de uma vez.
+- `docker compose stop redis`: o cache passa a dar `error`, cada redirect vai
+  ao Mongo e o rate limit deixa de valer (ele libera quando o Redis falha).
+- Acessar 31 códigos inexistentes em menos de 1 minuto: aparece `429` de
+  `redirect_miss`, e por até 1 minuto o mesmo IP recebe `429` também nos links
+  válidos.
 
 ## Desenvolvimento local
 

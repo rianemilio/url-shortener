@@ -1,0 +1,180 @@
+{
+  "uid": "url-shortener",
+  "title": "URL Shortener",
+  "description": "API, worker e RabbitMQ do encurtador",
+  "tags": ["url-shortener"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "type": "row", "title": "Saúde", "collapsed": false,
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+    {
+      "type": "stat", "title": "API",
+      "description": "1 = o Prometheus conseguiu coletar o /metrics da API.",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "up{job=\"api\"}" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": {
+          "0": { "text": "FORA", "color": "red" }, "1": { "text": "OK", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+      } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat", "title": "Worker",
+      "description": "1 = o Prometheus conseguiu coletar as métricas do worker (porta 9100).",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "up{job=\"worker\"}" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": {
+          "0": { "text": "FORA", "color": "red" }, "1": { "text": "OK", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+      } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat", "title": "RabbitMQ",
+      "description": "1 = o Prometheus conseguiu coletar o plugin rabbitmq_prometheus.",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "up{job=\"rabbitmq\"}" }],
+      "fieldConfig": { "defaults": {
+        "mappings": [{ "type": "value", "options": {
+          "0": { "text": "FORA", "color": "red" }, "1": { "text": "OK", "color": "green" } } }],
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+      } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat", "title": "Cache hit (5 min)",
+      "description": "Fração das consultas ao Redis que encontraram a URL. Erros contam como não-hit.",
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(rate(url_shortener_cache_lookups_total{result=\"hit\"}[5m])) / sum(rate(url_shortener_cache_lookups_total[5m]))" }],
+      "fieldConfig": { "defaults": {
+        "unit": "percentunit", "min": 0, "max": 1, "noValue": "sem tráfego",
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }, { "color": "green", "value": 0.8 }] }
+      } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat", "title": "Outbox pendente",
+      "description": "URLCreated gravados e ainda não publicados. Sobe com o RabbitMQ fora e volta a zero quando ele volta.",
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "url_shortener_outbox_pending_events{job=\"worker\"}" }],
+      "fieldConfig": { "defaults": {
+        "unit": "short", "decimals": 0,
+        "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }, { "color": "red", "value": 100 }] }
+      } },
+      "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "row", "title": "Tráfego", "collapsed": false,
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }
+    },
+    {
+      "type": "timeseries", "title": "Redirects por status",
+      "description": "307 = redirecionou; 404 = código inexistente; 429 = IP bloqueado por errar códigos demais.",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{status}}",
+        "expr": "sum by (status) (rate(url_shortener_http_requests_total{route=\"/{code}\"}[1m]))" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries", "title": "Requisições por rota",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{method}} {{route}}",
+        "expr": "sum by (method, route) (rate(url_shortener_http_requests_total{route!=\"/metrics\"}[1m]))" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries", "title": "Latência p95 por rota",
+      "description": "95% das requisições responderam abaixo deste tempo. Redirect com cache hit deve ficar em poucos ms.",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{method}} {{route}}",
+        "expr": "histogram_quantile(0.95, sum by (le, method, route) (rate(url_shortener_http_request_duration_seconds_bucket{route!=\"/metrics\"}[1m])))" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries", "title": "Cache: hit, miss e erro",
+      "description": "Erro = Redis fora ou lento; o redirect cai no Mongo e segue funcionando.",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{result}}",
+        "expr": "sum by (result) (rate(url_shortener_cache_lookups_total[1m]))" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10, "stacking": { "mode": "normal" } } } }
+    },
+    {
+      "type": "timeseries", "title": "Respostas 429 por limite",
+      "description": "create_url = criações demais; redirect_miss = códigos inexistentes demais (varredura).",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{scope}}",
+        "expr": "sum by (scope) (rate(url_shortener_rate_limited_requests_total[1m]))" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "row", "title": "Eventos e filas", "collapsed": false,
+      "gridPos": { "x": 0, "y": 29, "w": 24, "h": 1 }
+    },
+    {
+      "type": "timeseries", "title": "Eventos publicados e falhas",
+      "description": "Soma da API (url.clicked) e do worker (url.created, via outbox).",
+      "gridPos": { "x": 0, "y": 30, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "legendFormat": "publicado {{routing_key}}",
+          "expr": "sum by (routing_key) (rate(url_shortener_events_published_total[1m]))" },
+        { "refId": "B", "legendFormat": "falha {{routing_key}}",
+          "expr": "sum by (routing_key) (rate(url_shortener_event_publish_failures_total[1m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } },
+        "overrides": [{ "matcher": { "id": "byFrameRefID", "options": "B" },
+          "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }]
+      }
+    },
+    {
+      "type": "timeseries", "title": "Mensagens de clique no worker",
+      "description": "registered = clique contado; requeued = falha transitória, volta para a fila; dead_lettered = inválida, vai para a DLQ.",
+      "gridPos": { "x": 12, "y": 30, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{outcome}}",
+        "expr": "sum by (outcome) (rate(url_shortener_click_messages_total[1m]))" }],
+      "fieldConfig": { "defaults": { "unit": "ops", "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "type": "timeseries", "title": "Outbox pendente ao longo do tempo",
+      "gridPos": { "x": 0, "y": 38, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "pendentes",
+        "expr": "url_shortener_outbox_pending_events{job=\"worker\"}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "fillOpacity": 20 } } }
+    },
+    {
+      "type": "timeseries", "title": "Mensagens nas filas do RabbitMQ",
+      "description": "url_clicked_queue cresce com o worker parado; a DLQ só cresce com mensagens inválidas ou que estouraram as tentativas.",
+      "gridPos": { "x": 12, "y": 38, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "legendFormat": "{{queue}}",
+        "expr": "sum by (queue) (rabbitmq_queue_messages{queue=~\"url_clicked_queue.*\"})" }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "fillOpacity": 10 } } }
+    }
+  ]
+}
