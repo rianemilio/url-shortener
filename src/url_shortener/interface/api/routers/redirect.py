@@ -32,7 +32,11 @@ async def redirect_to_original_url(
 ) -> RedirectResponse:
     try:
         original_url = await handler.handle(GetOriginalUrlQuery(code=code))
-    except (InvalidShortCodeError, UrlNotFoundError) as error:
+    except InvalidShortCodeError as error:
+        # Fora do formato (/favicon.ico, /robots.txt, scanners): barrado antes do Mongo, então
+        # não custa nada e não conta para o limite, que bloquearia crawlers legítimos à toa.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except UrlNotFoundError as error:
         # Cada código inexistente conta para o limite: é o rastro de quem varre códigos.
         await record_redirect_miss(request)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error

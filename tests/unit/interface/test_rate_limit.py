@@ -119,6 +119,17 @@ async def test_blocks_redirect_after_too_many_missing_codes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_malformed_codes_do_not_count_towards_miss_limit() -> None:
+    miss_limiter = FakeRateLimiter(limit=1)
+    async with _client(FakeRateLimiter(limit=100), miss_limiter) as client:
+        paths = ["/favicon.ico", "/robots.txt", "/wp-login.php"]
+        statuses = [(await client.get(path)).status_code for path in paths]
+
+    assert statuses == [404, 404, 404]
+    assert miss_limiter.hits["127.0.0.1"] == 0
+
+
+@pytest.mark.asyncio
 async def test_successful_redirects_do_not_count_towards_miss_limit() -> None:
     miss_limiter = FakeRateLimiter(limit=1)
     async with _client(FakeRateLimiter(limit=100), miss_limiter) as client:

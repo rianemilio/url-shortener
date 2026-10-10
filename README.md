@@ -135,13 +135,16 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   `429` com `Retry-After`. O contador fica no Redis (janela fixa) para valer
   entre várias instâncias da API. Se o Redis falhar, a requisição passa: ele
   segue sendo acessório.
-- **Rate limit de códigos inexistentes**: cada redirect que dá `404` conta para
-  o IP (`APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS` por
-  `APP_RATE_LIMIT_REDIRECT_MISS_WINDOW_SECONDS`, padrão 30/min). Passado o
+- **Rate limit de códigos inexistentes**: cada redirect para um código bem
+  formado que não existe conta para o IP (`APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS`
+  por `APP_RATE_LIMIT_REDIRECT_MISS_WINDOW_SECONDS`, padrão 30/min). Passado o
   limite, o IP recebe `429` em qualquer redirect, inclusive de códigos válidos,
   e a consulta é barrada antes de chegar ao Mongo. Quem só acessa links válidos
   nunca é limitado. Isso custa uma leitura extra no Redis por redirect. Cache
   negativo não resolveria: quem varre códigos aleatórios não repete código.
+  Caminhos fora do formato de código (`/favicon.ico`, `/robots.txt`, scanners
+  atrás de `/wp-login.php`) respondem `404` sem contar: são rejeitados antes do
+  Mongo, então não custam nada, e contá-los bloquearia crawlers legítimos.
 - **IP do cliente atrás de proxy**: o uvicorn já lê `X-Forwarded-For`, mas só
   confia nele quando a conexão vem de um IP listado em `FORWARDED_ALLOW_IPS`
   (padrão `127.0.0.1`). Atrás de um proxy reverso, defina essa variável com o IP
