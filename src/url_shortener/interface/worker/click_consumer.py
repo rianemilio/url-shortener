@@ -4,7 +4,6 @@ import logging
 import signal
 
 import aio_pika
-from prometheus_client import start_http_server
 
 from url_shortener.application.commands.register_click import RegisterClickCommand
 from url_shortener.bootstrap.container import WorkerContainer
@@ -14,7 +13,7 @@ from url_shortener.infrastructure.messaging.topology import MAX_DELIVERY_RETRIES
 from url_shortener.interface.worker.heartbeat import run_heartbeat
 from url_shortener.interface.worker.outbox_relay import run_outbox_relay
 from url_shortener.logging_config import configure_logging
-from url_shortener.metrics import CLICK_MESSAGES
+from url_shortener.metrics import CLICK_MESSAGES, MetricsServer
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +123,11 @@ async def run() -> None:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    # Thread própria do prometheus_client: o /metrics responde mesmo com o loop ocupado.
-    start_http_server(settings.worker_metrics_port)
-    asyncio.run(run())
+    metrics_server = MetricsServer(settings.metrics_port)
+    try:
+        asyncio.run(run())
+    finally:
+        metrics_server.close()
 
 
 if __name__ == "__main__":

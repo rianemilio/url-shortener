@@ -97,7 +97,7 @@ services:
       rabbitmq:
         condition: service_healthy
 
-  # Observabilidade (só desenvolvimento): o Prometheus coleta o /metrics da API, do worker
+  # Observabilidade (só desenvolvimento): o Prometheus coleta as métricas da API, do worker
   # e do RabbitMQ a cada 5s e guarda o histórico; o Grafana desenha os gráficos.
   prometheus:
     image: prom/prometheus:v3.5.0

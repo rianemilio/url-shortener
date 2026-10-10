@@ -15,7 +15,7 @@
     },
     {
       "type": "stat", "title": "API",
-      "description": "1 = o Prometheus conseguiu coletar o /metrics da API.",
+      "description": "1 = o Prometheus conseguiu coletar as métricas da API (porta 9100).",
       "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "expr": "up{job=\"api\"}" }],
@@ -99,7 +99,7 @@
       "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "legendFormat": "{{method}} {{route}}",
-        "expr": "sum by (method, route) (rate(url_shortener_http_requests_total{route!=\"/metrics\"}[1m]))" }],
+        "expr": "sum by (method, route) (rate(url_shortener_http_requests_total[1m]))" }],
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10 } } }
     },
     {
@@ -108,7 +108,7 @@
       "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "refId": "A", "legendFormat": "{{method}} {{route}}",
-        "expr": "histogram_quantile(0.95, sum by (le, method, route) (rate(url_shortener_http_request_duration_seconds_bucket{route!=\"/metrics\"}[1m])))" }],
+        "expr": "histogram_quantile(0.95, sum by (le, method, route) (rate(url_shortener_http_request_duration_seconds_bucket[1m])))" }],
       "fieldConfig": { "defaults": { "unit": "s" } }
     },
     {

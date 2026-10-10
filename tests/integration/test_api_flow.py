@@ -32,6 +32,8 @@ def _env(containers, monkeypatch):
     monkeypatch.setenv("APP_MONGO_URI", containers["mongo_uri"])
     monkeypatch.setenv("APP_REDIS_URI", containers["redis_uri"])
     monkeypatch.setenv("APP_RABBITMQ_URI", containers["rabbitmq_uri"])
+    # Porta 0: o sistema escolhe uma livre (a API sobe e desce várias vezes nos testes).
+    monkeypatch.setenv("APP_METRICS_PORT", "0")
 
     from url_shortener.config import get_settings
 
@@ -309,12 +311,19 @@ async def test_redirect_is_blocked_after_too_many_missing_codes(
 
 
 @pytest.mark.asyncio
-async def test_metrics_endpoint_reflects_real_traffic(app_client: httpx.AsyncClient) -> None:
+async def test_metrics_are_served_on_their_own_port(app_client: httpx.AsyncClient) -> None:
+    from url_shortener.interface.api.main import app
+
     code = (await app_client.post("/urls", json={"url": "https://example.com/mt"})).json()["code"]
     await app_client.get(f"/{code}", follow_redirects=False)
 
-    body = (await app_client.get("/metrics")).text
+    port = app.state.metrics_server.port
+    async with httpx.AsyncClient() as metrics_client:
+        body = (await metrics_client.get(f"http://127.0.0.1:{port}/metrics")).text
+    # Na porta pública, /metrics é só mais um código curto (inexistente).
+    public = await app_client.get("/metrics")
 
+    assert public.status_code == 404
     assert 'route="/{code}",status="307"' in body
     assert 'url_shortener_cache_lookups_total{result="hit"}' in body
     assert code not in body

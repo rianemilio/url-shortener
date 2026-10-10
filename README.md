@@ -112,17 +112,19 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   heartbeat velho não parecer saudável. Atenção: no Docker/Podman, `unhealthy`
   só sinaliza; o `restart: unless-stopped` não reinicia o container por isso
   (um orquestrador como Kubernetes, sim).
-- **Métricas (Prometheus)**: a API expõe `GET /metrics` e o worker, um servidor
-  próprio na porta `APP_WORKER_METRICS_PORT` (9100, não publicada no compose).
+- **Métricas (Prometheus)**: API e worker expõem `/metrics` num servidor
+  próprio na porta `APP_METRICS_PORT` (9100), separada da porta da aplicação e
+  não publicada no compose. Na API, isso tem dois motivos: uma rota `/metrics`
+  disputaria caminho com `/{code}` (um código curto `metrics` seria possível) e
+  ficaria aberta na porta pública junto com os redirects.
   Os nomes começam com `url_shortener_`: requisições e latência por rota
   (rotuladas pelo template `/{code}`, nunca pelo código, para não criar uma série
   por URL), cache `hit`/`miss`/`error`, respostas `429` por limite, eventos
   publicados e falhas de publicação, desfecho das mensagens de clique
   (`registered`, `requeued`, `dead_lettered`) e eventos pendentes no outbox.
   Profundidade das filas e da DLQ vêm do plugin `rabbitmq_prometheus`, já ligado
-  na imagem (porta 15692). Em produção, `/metrics` não deveria ficar aberto na
-  internet: restrinja no proxy. Com mais de um processo uvicorn por container,
-  cada um teria o próprio contador; aí seria preciso o modo multiprocess do
+  na imagem (porta 15692). Com mais de um processo uvicorn por container, cada
+  um teria o próprio contador; aí seria preciso o modo multiprocess do
   `prometheus_client`.
 - **Rate limit na criação**: `POST /urls` aceita até
   `APP_RATE_LIMIT_CREATE_REQUESTS` chamadas por IP a cada
@@ -183,10 +185,10 @@ docker compose exec mongo mongosh url_shortener --eval 'db.urls.find()'
 
 O compose também sobe:
 
-- **Prometheus** (`localhost:9090`): a cada 5s coleta o `/metrics` da API, do
-  worker (porta 9100) e do RabbitMQ (plugin `rabbitmq_prometheus`, porta 15692)
-  e guarda o histórico por 7 dias (`observability/prometheus.yml`). Em
-  *Status → Targets* dá para ver se os três estão `UP`.
+- **Prometheus** (`localhost:9090`): a cada 5s coleta as métricas da API e do
+  worker (porta 9100 de cada um) e do RabbitMQ (plugin `rabbitmq_prometheus`,
+  porta 15692) e guarda o histórico por 7 dias (`observability/prometheus.yml`).
+  Em *Status → Targets* dá para ver se os três estão `UP`.
 - **Grafana** (`localhost:3000`): abre direto no dashboard *URL Shortener*, sem
   login. O datasource e o dashboard são provisionados a partir de
   `observability/grafana/`. Alterações feitas no navegador somem ao recriar o

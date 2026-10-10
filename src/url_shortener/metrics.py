@@ -1,11 +1,12 @@
 """Métricas Prometheus da API e do worker.
 
-Cada processo tem o próprio registry: a API expõe em `GET /metrics` e o worker num servidor
-HTTP próprio (`APP_WORKER_METRICS_PORT`). Profundidade das filas e da DLQ não estão aqui: o
+Cada processo tem o próprio registry e o expõe num servidor HTTP separado da aplicação
+(`APP_METRICS_PORT`), não numa rota da API: assim o `/metrics` não disputa caminho com
+`/{code}` e não fica na porta pública. Profundidade das filas e da DLQ não estão aqui: o
 plugin `rabbitmq_prometheus`, ligado por padrão na imagem do RabbitMQ, já as expõe na 15692.
 """
 
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 HTTP_REQUESTS = Counter(
     "url_shortener_http_requests_total",
@@ -49,3 +50,20 @@ OUTBOX_PENDING = Gauge(
     "url_shortener_outbox_pending_events",
     "Eventos URLCreated gravados e ainda não publicados (medido a cada heartbeat do worker)",
 )
+
+
+class MetricsServer:
+    """Serve o `/metrics` numa thread própria: responde mesmo com o loop de eventos ocupado."""
+
+    def __init__(self, port: int) -> None:
+        self._server, self._thread = start_http_server(port)
+
+    @property
+    def port(self) -> int:
+        """Porta efetiva (útil com porta 0, em que o sistema escolhe uma livre)."""
+        return int(self._server.server_port)
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+        self._thread.join(timeout=5)
