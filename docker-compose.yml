@@ -46,6 +46,8 @@ services:
       # Só para desenvolvimento: em produção defina APP_CODE_SECRET com um valor aleatório
       # (ex.: `openssl rand -hex 32`). Quem conhece a chave consegue enumerar os códigos.
       APP_CODE_SECRET: ${APP_CODE_SECRET:-dev-only-troque-esta-chave}
+      # O prometheus_client cria uma série *_created (timestamp) por contador: só ruído.
+      PROMETHEUS_DISABLE_CREATED_SERIES: "true"
       # Atrás de um proxy reverso, liste o IP dele para o uvicorn confiar no X-Forwarded-For
       # (senão o rate limit enxerga todos os clientes como o proxy).
       # FORWARDED_ALLOW_IPS: "10.0.0.2"
@@ -77,6 +79,8 @@ services:
       APP_REDIS_URI: redis://redis:6379/0
       APP_RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
       APP_CODE_SECRET: ${APP_CODE_SECRET:-dev-only-troque-esta-chave}
+      # O prometheus_client cria uma série *_created (timestamp) por contador: só ruído.
+      PROMETHEUS_DISABLE_CREATED_SERIES: "true"
     healthcheck:
       # O worker toca um arquivo de heartbeat enquanto Mongo e RabbitMQ respondem; o check
       # falha se ele envelhecer (ex.: loop travado ou dependência fora).
