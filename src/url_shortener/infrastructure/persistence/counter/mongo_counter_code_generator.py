@@ -3,6 +3,7 @@ from pymongo import ReturnDocument
 
 from url_shortener.domain.services import code_scrambler
 from url_shortener.domain.value_objects.short_code import ShortCode
+from url_shortener.infrastructure.persistence.mongo.errors import translate_connection_errors
 from url_shortener.infrastructure.persistence.mongo.models import (
     COUNTERS_COLLECTION,
     SHORT_URL_SEQUENCE_ID,
@@ -14,10 +15,11 @@ class MongoCounterCodeGenerator:
         self._collection = database[COUNTERS_COLLECTION]
 
     async def next_code(self) -> ShortCode:
-        document = await self._collection.find_one_and_update(
-            {"_id": SHORT_URL_SEQUENCE_ID},
-            {"$inc": {"seq": 1}},
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
+        with translate_connection_errors():
+            document = await self._collection.find_one_and_update(
+                {"_id": SHORT_URL_SEQUENCE_ID},
+                {"$inc": {"seq": 1}},
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
         return ShortCode(code_scrambler.scramble(document["seq"]))

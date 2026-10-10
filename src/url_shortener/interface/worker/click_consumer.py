@@ -7,10 +7,11 @@ import aio_pika
 
 from url_shortener.application.commands.register_click import RegisterClickCommand
 from url_shortener.bootstrap.container import WorkerContainer
+from url_shortener.config import get_settings
 from url_shortener.domain.exceptions import DomainError
 from url_shortener.infrastructure.messaging.topology import MAX_DELIVERY_RETRIES
+from url_shortener.logging_config import configure_logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 _RETRY_BACKOFF_BASE_SECONDS = 1.0
@@ -105,6 +106,7 @@ async def run() -> None:
 
 
 def main() -> None:
+    configure_logging(get_settings().log_level)
     asyncio.run(run())
 
 

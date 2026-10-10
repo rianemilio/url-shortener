@@ -75,6 +75,10 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   responde) prende a requisição indefinidamente (Redis) ou por 30s (Mongo).
 - **Validação de URL contra phishing**: URLs com credenciais
   (`https://google.com@evil.com`, cujo host real é `evil.com`) são rejeitadas.
+- **Mongo fora do ar responde `503`, não `500`**: os adapters do Mongo
+  convertem falhas de conexão em `StorageUnavailableError` (camada de
+  aplicação, sem depender do pymongo) e a API responde `503` com
+  `Retry-After`, sinalizando que vale tentar de novo.
 - **Health checks**: `GET /health` é *liveness*: não toca dependências, para
   o orquestrador não reiniciar a API só porque o Mongo caiu. `GET /health/ready`
   é *readiness*: só o Mongo é obrigatório (`503` sem ele); sem Redis ou
@@ -117,6 +121,10 @@ docker compose exec mongo mongosh url_shortener --eval 'db.urls.find()'
 ```
 
 ## Desenvolvimento local
+
+O CI (`.github/workflows/ci.yml`) roda lint, formatação, mypy e testes unitários
+a cada push na `main` e em pull requests; se passarem, roda os testes de
+integração.
 
 ```bash
 uv sync

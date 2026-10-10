@@ -39,6 +39,17 @@ services:
       APP_REDIS_URI: redis://redis:6379/0
       APP_RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
       APP_BASE_URL: http://localhost:8000
+    healthcheck:
+      # urlopen levanta erro em 503 (sem Mongo); "degraded" (200) conta como saudável.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     depends_on:
       mongo:
         condition: service_healthy

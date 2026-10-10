@@ -2,6 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from url_shortener.domain.entities.short_url import ShortUrl
 from url_shortener.domain.value_objects.short_code import ShortCode
+from url_shortener.infrastructure.persistence.mongo.errors import translate_connection_errors
 from url_shortener.infrastructure.persistence.mongo.models import (
     URLS_COLLECTION,
     document_to_short_url,
@@ -14,13 +15,16 @@ class MongoUrlRepository:
         self._collection = database[URLS_COLLECTION]
 
     async def save(self, short_url: ShortUrl) -> None:
-        await self._collection.insert_one(short_url_to_document(short_url))
+        with translate_connection_errors():
+            await self._collection.insert_one(short_url_to_document(short_url))
 
     async def find_by_code(self, code: ShortCode) -> ShortUrl | None:
-        document = await self._collection.find_one({"_id": str(code)})
+        with translate_connection_errors():
+            document = await self._collection.find_one({"_id": str(code)})
         if document is None:
             return None
         return document_to_short_url(document)
 
     async def increment_clicks(self, code: ShortCode) -> None:
-        await self._collection.update_one({"_id": str(code)}, {"$inc": {"click_count": 1}})
+        with translate_connection_errors():
+            await self._collection.update_one({"_id": str(code)}, {"$inc": {"click_count": 1}})
