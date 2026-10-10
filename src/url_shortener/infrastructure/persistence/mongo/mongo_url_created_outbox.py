@@ -37,3 +37,7 @@ class MongoUrlCreatedOutbox:
             await self._collection.update_one(
                 {"_id": event.code}, {"$unset": {URL_CREATED_PENDING_FIELD: ""}}
             )
+
+    async def count_pending(self) -> int:
+        with translate_connection_errors():
+            return int(await self._collection.count_documents(_PENDING_FILTER))

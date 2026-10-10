@@ -306,3 +306,15 @@ async def test_redirect_is_blocked_after_too_many_missing_codes(
     assert statuses == [404, 404, 429]
     # O bloqueio vale para o IP, inclusive em códigos válidos: quem varre não ganha atalho.
     assert valid_after_block.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_reflects_real_traffic(app_client: httpx.AsyncClient) -> None:
+    code = (await app_client.post("/urls", json={"url": "https://example.com/mt"})).json()["code"]
+    await app_client.get(f"/{code}", follow_redirects=False)
+
+    body = (await app_client.get("/metrics")).text
+
+    assert 'route="/{code}",status="307"' in body
+    assert 'url_shortener_cache_lookups_total{result="hit"}' in body
+    assert code not in body

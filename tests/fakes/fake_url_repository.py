@@ -45,3 +45,6 @@ class FakeUrlRepository:
 
     async def ensure_indexes(self) -> None:
         """No Mongo cria o índice do outbox; aqui não há o que fazer."""
+
+    async def count_pending(self) -> int:
+        return len(self.pending_codes)

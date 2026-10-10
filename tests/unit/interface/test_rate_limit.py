@@ -8,6 +8,7 @@ from tests.fakes.fake_cache import FakeCache
 from tests.fakes.fake_code_generator import FakeCodeGenerator
 from tests.fakes.fake_event_publisher import FakeEventPublisher
 from tests.fakes.fake_url_repository import FakeUrlRepository
+from tests.metrics_helpers import sample
 from url_shortener.application.commands.create_short_url import CreateShortUrlCommandHandler
 from url_shortener.application.commands.track_click import TrackClickCommandHandler
 from url_shortener.application.queries.get_original_url import GetOriginalUrlQueryHandler
@@ -126,3 +127,19 @@ async def test_successful_redirects_do_not_count_towards_miss_limit() -> None:
 
     assert statuses == [307, 307, 307]
     assert miss_limiter.hits["127.0.0.1"] == 0
+
+
+@pytest.mark.asyncio
+async def test_counts_rejections_per_scope() -> None:
+    def rejected(scope: str) -> float:
+        return sample("url_shortener_rate_limited_requests_total", scope=scope)
+
+    create_before, miss_before = rejected("create_url"), rejected("redirect_miss")
+    async with _client(FakeRateLimiter(limit=1), FakeRateLimiter(limit=1)) as client:
+        for _ in range(2):
+            await _create(client)
+        for i in range(2):
+            await client.get(f"/naoexiste{i}")
+
+    assert rejected("create_url") == create_before + 1
+    assert rejected("redirect_miss") == miss_before + 1

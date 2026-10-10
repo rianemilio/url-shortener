@@ -9,6 +9,7 @@ from url_shortener.application.ports.event_publisher_port import DomainEvent
 from url_shortener.config import Settings
 from url_shortener.infrastructure.messaging.rabbitmq_connection import create_rabbitmq_connection
 from url_shortener.infrastructure.messaging.topology import declare_topology
+from url_shortener.metrics import EVENT_PUBLISH_FAILURES, EVENTS_PUBLISHED
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,14 @@ class RabbitMQPublisher:
         return self._connection is not None and self._connection.connected.is_set()
 
     async def publish(self, event: DomainEvent) -> None:
+        try:
+            await self._publish(event)
+        except Exception:
+            EVENT_PUBLISH_FAILURES.labels(event.ROUTING_KEY).inc()
+            raise
+        EVENTS_PUBLISHED.labels(event.ROUTING_KEY).inc()
+
+    async def _publish(self, event: DomainEvent) -> None:
         if self._exchange is None:
             raise EventPublisherUnavailableError("RabbitMQ ainda não conectado")
 

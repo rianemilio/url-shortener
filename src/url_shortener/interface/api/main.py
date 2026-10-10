@@ -6,7 +6,8 @@ from fastapi import FastAPI
 from url_shortener.bootstrap.container import ApiContainer
 from url_shortener.config import get_settings
 from url_shortener.interface.api.errors import register_error_handlers
-from url_shortener.interface.api.routers import health, redirect, urls
+from url_shortener.interface.api.metrics import HttpMetricsMiddleware
+from url_shortener.interface.api.routers import health, metrics, redirect, urls
 from url_shortener.logging_config import configure_logging
 
 
@@ -23,9 +24,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="URL Shortener", lifespan=lifespan)
+app.add_middleware(HttpMetricsMiddleware)
 register_error_handlers(app)
 
-# health antes do redirect: senão GET /health cairia em /{code}.
+# health e metrics antes do redirect: senão GET /health e /metrics cairiam em /{code}.
 app.include_router(health.router)
+app.include_router(metrics.router)
 app.include_router(urls.router)
 app.include_router(redirect.router)

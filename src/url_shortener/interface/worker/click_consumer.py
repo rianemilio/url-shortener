@@ -1,18 +1,20 @@
 import asyncio
-import contextlib
 import json
 import logging
 import signal
 
 import aio_pika
+from prometheus_client import start_http_server
 
 from url_shortener.application.commands.register_click import RegisterClickCommand
 from url_shortener.bootstrap.container import WorkerContainer
 from url_shortener.config import get_settings
 from url_shortener.domain.exceptions import DomainError
 from url_shortener.infrastructure.messaging.topology import MAX_DELIVERY_RETRIES
+from url_shortener.interface.worker.heartbeat import run_heartbeat
 from url_shortener.interface.worker.outbox_relay import run_outbox_relay
 from url_shortener.logging_config import configure_logging
+from url_shortener.metrics import CLICK_MESSAGES
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,7 @@ async def _handle_message(
         # Erro permanente: requeue causaria loop infinito, então vai para a DLQ.
         logger.exception("Mensagem de click inválida, enviada para a DLQ")
         await message.reject(requeue=False)
+        CLICK_MESSAGES.labels("dead_lettered").inc()
     except Exception:
         # Erro transitório (ex.: Mongo fora do ar): espera e devolve para a fila. Passado o
         # x-delivery-limit da fila, o próprio RabbitMQ manda a mensagem para a DLQ.
@@ -70,8 +73,10 @@ async def _handle_message(
         # imediatamente a outro slot do prefetch, anulando o backoff.
         await asyncio.sleep(delay)
         await message.nack(requeue=True)
+        CLICK_MESSAGES.labels("requeued").inc()
     else:
         await message.ack()
+        CLICK_MESSAGES.labels("registered").inc()
         logger.info("Click registrado para o código %s", command.code)
 
 
@@ -91,17 +96,20 @@ async def run() -> None:
         await _handle_message(message, container)
 
     consumer_tag = await queue.consume(on_message)
-    relay_task = asyncio.create_task(run_outbox_relay(container, stop))
+    background_tasks = [
+        asyncio.create_task(run_outbox_relay(container, stop)),
+        asyncio.create_task(run_heartbeat(container, stop)),
+    ]
     logger.info("Worker aguardando mensagens em url_clicked_queue...")
     try:
         await stop.wait()
         logger.info("Sinal de parada recebido, encerrando o worker")
     finally:
-        # Normalmente o relay já saiu sozinho com o `stop`; o cancel cobre o caso de o
+        # Normalmente as tasks já saíram sozinhas com o `stop`; o cancel cobre o caso de o
         # `run()` ter sido cancelado de fora (ex.: nos testes).
-        relay_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await relay_task
+        for task in background_tasks:
+            task.cancel()
+        await asyncio.gather(*background_tasks, return_exceptions=True)
         for sig in _STOP_SIGNALS:
             loop.remove_signal_handler(sig)
         try:
@@ -114,7 +122,10 @@ async def run() -> None:
 
 
 def main() -> None:
-    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    # Thread própria do prometheus_client: o /metrics responde mesmo com o loop ocupado.
+    start_http_server(settings.worker_metrics_port)
     asyncio.run(run())
 
 

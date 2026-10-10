@@ -101,6 +101,29 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   o orquestrador não reiniciar a API só porque o Mongo caiu. `GET /health/ready`
   é *readiness*: só o Mongo é obrigatório (`503` sem ele); sem Redis ou
   RabbitMQ a API segue funcionando e responde `200` com status `degraded`.
+- **Health check do worker**: o worker não tem HTTP de saúde. Ele toca um
+  arquivo de heartbeat (`APP_WORKER_HEARTBEAT_FILE`) a cada
+  `APP_WORKER_HEARTBEAT_INTERVAL_SECONDS` (10s), mas só se o loop de eventos
+  responde, o Mongo está acessível e a conexão de consumo com o RabbitMQ está de
+  pé: o processo vivo não basta, porque sem essas dependências ele não faz o seu
+  trabalho. O healthcheck do container
+  (`python -m url_shortener.interface.worker.healthcheck`) falha se o arquivo
+  tiver mais de 3 intervalos. O arquivo é apagado na subida e na parada, para um
+  heartbeat velho não parecer saudável. Atenção: no Docker/Podman, `unhealthy`
+  só sinaliza; o `restart: unless-stopped` não reinicia o container por isso
+  (um orquestrador como Kubernetes, sim).
+- **Métricas (Prometheus)**: a API expõe `GET /metrics` e o worker, um servidor
+  próprio na porta `APP_WORKER_METRICS_PORT` (9100, não publicada no compose).
+  Os nomes começam com `url_shortener_`: requisições e latência por rota
+  (rotuladas pelo template `/{code}`, nunca pelo código, para não criar uma série
+  por URL), cache `hit`/`miss`/`error`, respostas `429` por limite, eventos
+  publicados e falhas de publicação, desfecho das mensagens de clique
+  (`registered`, `requeued`, `dead_lettered`) e eventos pendentes no outbox.
+  Profundidade das filas e da DLQ vêm do plugin `rabbitmq_prometheus`, já ligado
+  na imagem (porta 15692). Em produção, `/metrics` não deveria ficar aberto na
+  internet: restrinja no proxy. Com mais de um processo uvicorn por container,
+  cada um teria o próprio contador; aí seria preciso o modo multiprocess do
+  `prometheus_client`.
 - **Rate limit na criação**: `POST /urls` aceita até
   `APP_RATE_LIMIT_CREATE_REQUESTS` chamadas por IP a cada
   `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (padrão 20/min); acima disso responde
@@ -127,10 +150,15 @@ cp .env.example .env
 # compose usa uma chave de desenvolvimento
 docker compose up --build
 ```
-
 Sobe `api` (porta 8000), `worker`, `mongo`, `redis` e `rabbitmq` (painel de
 management em `localhost:15672`, usuário/senha `guest`/`guest`).
-`api` e `worker` usam `restart: unless-stopped`: se caírem, voltam sozinhos.
+`api` e `worker` usam `restart: unless-stopped`: se o processo cair, voltam
+sozinhos.
+
+O compose é para desenvolvimento: o RabbitMQ usa o usuário padrão `guest/guest`
+(acesso total ao broker) e o painel é publicado só em `127.0.0.1`, para não
+ficar aberto na rede. Em produção, crie um usuário com
+`RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` e ajuste `APP_RABBITMQ_URI`.
 
 ### Testando manualmente
 

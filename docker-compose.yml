@@ -19,8 +19,12 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    # Só para desenvolvimento: o usuário padrão guest/guest tem acesso total ao broker. Em
+    # produção, defina RABBITMQ_DEFAULT_USER/RABBITMQ_DEFAULT_PASS (e ajuste APP_RABBITMQ_URI).
     ports:
-      - "15672:15672"
+      # Painel de management só no localhost: publicado como "15672:15672", ficaria aberto
+      # para a rede inteira com guest/guest.
+      - "127.0.0.1:15672:15672"
     healthcheck:
       # su-exec: rodar a CLI como root cria o .erlang.cookie com dono errado e derruba o broker.
       # check_port_connectivity (e não ping): só fica healthy quando a porta AMQP aceita conexões.
@@ -73,6 +77,14 @@ services:
       APP_REDIS_URI: redis://redis:6379/0
       APP_RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
       APP_CODE_SECRET: ${APP_CODE_SECRET:-dev-only-troque-esta-chave}
+    healthcheck:
+      # O worker toca um arquivo de heartbeat enquanto Mongo e RabbitMQ respondem; o check
+      # falha se ele envelhecer (ex.: loop travado ou dependência fora).
+      test: ["CMD", "python", "-m", "url_shortener.interface.worker.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     depends_on:
       mongo:
         condition: service_healthy

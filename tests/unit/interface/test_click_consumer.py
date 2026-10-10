@@ -1,12 +1,14 @@
 import asyncio
 import signal
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from tests.fakes.fake_event_publisher import FakeEventPublisher
 from tests.fakes.fake_url_repository import FakeUrlRepository
+from tests.metrics_helpers import sample
 from url_shortener.application.commands.publish_pending_events import (
     PublishPendingEventsCommandHandler,
 )
@@ -135,12 +137,19 @@ class FakeChannel:
         pass
 
 
-class FakeRunnableWorkerContainer:
+class FakeConnection:
     def __init__(self) -> None:
+        self.connected = asyncio.Event()
+        self.connected.set()
+
+
+class FakeRunnableWorkerContainer:
+    def __init__(self, heartbeat_file: Path) -> None:
         self.url_clicked_queue = FakeQueue()
         self.rabbitmq_channel = FakeChannel()
         self.closed = False
-        self.settings = Settings()
+        self.settings = Settings(worker_heartbeat_file=str(heartbeat_file))
+        self.rabbitmq_connection = FakeConnection()
         repo = FakeUrlRepository()
         self.url_created_outbox = repo
         self.publish_pending_events_handler = PublishPendingEventsCommandHandler(
@@ -152,8 +161,10 @@ class FakeRunnableWorkerContainer:
 
 
 @pytest.mark.asyncio
-async def test_run_shuts_down_gracefully_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
-    container = FakeRunnableWorkerContainer()
+async def test_run_shuts_down_gracefully_on_sigterm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    container = FakeRunnableWorkerContainer(tmp_path / "heartbeat")
 
     async def fake_create() -> FakeRunnableWorkerContainer:
         return container
@@ -168,3 +179,27 @@ async def test_run_shuts_down_gracefully_on_sigterm(monkeypatch: pytest.MonkeyPa
 
     assert container.url_clicked_queue.cancelled
     assert container.closed
+    assert not (tmp_path / "heartbeat").exists()
+
+
+@pytest.mark.parametrize(
+    ("body", "repository", "outcome"),
+    [
+        (b'{"code": "abc"}', FakeUrlRepository(), "registered"),
+        (b"not json", FakeUrlRepository(), "dead_lettered"),
+        (b'{"code": "abc"}', BrokenRepository(), "requeued"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_counts_message_outcomes(
+    body: bytes,
+    repository: FakeUrlRepository,
+    outcome: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(click_consumer, "_RETRY_BACKOFF_BASE_SECONDS", 0)
+    before = sample("url_shortener_click_messages_total", outcome=outcome)
+
+    await _handle(body, repository)
+
+    assert sample("url_shortener_click_messages_total", outcome=outcome) == before + 1

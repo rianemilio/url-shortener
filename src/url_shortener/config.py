@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     outbox_poll_interval_seconds: float = 1.0
     outbox_batch_size: int = 100
 
+    worker_metrics_port: int = 9100
+    # O worker toca este arquivo enquanto está saudável; o healthcheck confere a idade dele.
+    worker_heartbeat_file: str = "/tmp/url-shortener-worker.heartbeat"
+    worker_heartbeat_interval_seconds: float = 10.0
+
     base_url: str = "http://localhost:8000"
 
     log_level: str = "INFO"

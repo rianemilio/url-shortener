@@ -4,6 +4,7 @@ from typing import Protocol
 from fastapi import HTTPException, Request, status
 
 from url_shortener.infrastructure.rate_limit.redis_rate_limiter import RateLimitDecision
+from url_shortener.metrics import RATE_LIMITED
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ async def enforce_create_rate_limit(request: Request) -> None:
 
     if not decision.allowed:
         _raise_too_many_requests(
-            "Limite de criação de URLs excedido, tente novamente mais tarde", decision
+            "create_url", "Limite de criação de URLs excedido, tente novamente mais tarde", decision
         )
 
 
@@ -54,7 +55,7 @@ async def enforce_redirect_miss_limit(request: Request) -> None:
 
     if not decision.allowed:
         _raise_too_many_requests(
-            "Muitos códigos inexistentes, tente novamente mais tarde", decision
+            "redirect_miss", "Muitos códigos inexistentes, tente novamente mais tarde", decision
         )
 
 
@@ -67,7 +68,8 @@ async def record_redirect_miss(request: Request) -> None:
         logger.warning("Falha ao contabilizar código inexistente para %s", ip, exc_info=True)
 
 
-def _raise_too_many_requests(detail: str, decision: RateLimitDecision) -> None:
+def _raise_too_many_requests(scope: str, detail: str, decision: RateLimitDecision) -> None:
+    RATE_LIMITED.labels(scope).inc()
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=detail,
