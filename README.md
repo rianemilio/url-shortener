@@ -1,226 +1,236 @@
 # url-shortener
 
-Encurtador de URLs propositalmente "overengineered": a funcionalidade é mínima
-(encurtar + redirecionar), mas a arquitetura aplica Clean Architecture, CQRS e
-design orientado a eventos, com MongoDB e Redis como bancos NoSQL.
+![CI](https://github.com/rianemilio/url-shortner/actions/workflows/ci.yml/badge.svg)
+
+**English** | [Português](README.pt-BR.md)
+
+An intentionally "overengineered" URL shortener: the feature set is minimal
+(shorten + redirect), but the architecture applies Clean Architecture, CQRS and
+event-driven design, with MongoDB and Redis as NoSQL stores.
 
 ## Stack
 
 - **Backend**: Python 3.12 + FastAPI
-- **Banco de dados**: MongoDB (fonte da verdade) + Redis (cache de lookup)
-- **Mensageria**: RabbitMQ (eventos `URLCreated` e `URLClicked`)
-- **Gerenciador de pacotes**: [uv](https://github.com/astral-sh/uv)
-- **Qualidade**: ruff (lint/format) + mypy
+- **Database**: MongoDB (source of truth) + Redis (lookup cache)
+- **Messaging**: RabbitMQ (`URLCreated` and `URLClicked` events)
+- **Package manager**: [uv](https://github.com/astral-sh/uv)
+- **Quality**: ruff (lint/format) + mypy
 
-## Arquitetura
+## Architecture
 
 ```
-domain/          entidades, value objects, eventos e regras puras, sem dependências externas
-application/     casos de uso (commands/queries) e portas (Protocol) que a infra implementa
-infrastructure/  adapters concretos: Mongo, Redis, RabbitMQ
-interface/       API FastAPI e worker consumidor de eventos
-bootstrap/       composição manual das dependências (container de DI)
+domain/          entities, value objects, events and pure rules, no external dependencies
+application/     use cases (commands/queries) and ports (Protocol) implemented by infra
+infrastructure/  concrete adapters: Mongo, Redis, RabbitMQ
+interface/       FastAPI API and event-consuming worker
+bootstrap/       manual dependency wiring (DI container)
 ```
 
-Regra de dependência: `domain` e `application` nunca importam `infrastructure` ou
-`interface`. As portas ficam em `application/ports/*.py` como `typing.Protocol`;
-os adapters em `infrastructure/**` as implementam por structural typing.
+Dependency rule: `domain` and `application` never import `infrastructure` or
+`interface`. Ports live in `application/ports/*.py` as `typing.Protocol`; the
+adapters in `infrastructure/**` implement them through structural typing.
 
-### Decisões de design
+### Design decisions
 
-- **Geração de código curto**: contador atômico no MongoDB (`findOneAndUpdate`
-  com `$inc`), embaralhado e convertido para base62 com 7 caracteres. Como o
-  Mongo é a única fonte de verdade (inclusive do contador) e a sequência é
-  estritamente crescente, em operação normal não há colisão, diferente de
-  estratégias baseadas em hash ou valores aleatórios. Se mesmo assim o código já
-  existir (chave trocada ou contador resetado), o `_id` duplicado vira
-  `ShortCodeConflictError` e o caso de uso tenta outro código, até 3 vezes.
-  Códigos iguais a uma rota fixa da API (`health`, `urls`, `docs`...) também são
-  pulados: essas rotas são casadas antes de `/{code}`, e o link ficaria
-  inacessível. A lista é derivada das rotas registradas, então cobre as futuras.
-- **Códigos não enumeráveis**: o contador passa por uma rede de Feistel com
-  chave secreta (`APP_CODE_SECRET`) sobre o domínio exato `[0, 62^7)`
-  (`domain/services/code_scrambler.py`). É uma bijeção, então continua sem
-  colisão, e sem a chave os códigos já vistos não ajudam a prever os próximos.
-  Uma versão anterior usava `n * K mod 62^7`, que é linear: dois códigos
-  consecutivos diferiam sempre por `K`, então duas criações bastavam para
-  enumerar tudo. A chave é obrigatória e não tem default. Trocá-la não invalida
-  os links existentes (o código é gravado, não recalculado), só muda os
-  próximos. O espaço comporta ~3,5 trilhões de códigos.
-- **Redis é só cache**: nunca guarda dado que não possa ser reconstruído a
-  partir do Mongo. Se cair, o sistema continua funcionando (com mais leituras
-  no Mongo); falhas de leitura e escrita no cache são logadas e ignoradas.
-- **CQRS**: `CreateShortUrlCommandHandler` só escreve; `GetOriginalUrlQueryHandler`
-  só lê, sem efeitos colaterais. O rastreamento do clique é um comando separado
-  (`TrackClickCommandHandler`), que o router agenda como background task depois
-  de resolver a URL. Cada handler recebe suas portas via injeção de construtor.
-- **Eventos com consumidor de verdade**: o evento `URLClicked` é
-  publicado no redirect (sem bloquear a resposta) e consumido por um worker
-  separado que incrementa `click_count` no Mongo: dá uso genuíno ao RabbitMQ
-  sem virar uma feature completa de analytics. O evento `URLCreated` existe para
-  uma extensão futura (hoje sem consumidor).
-- **`URLCreated` via transactional outbox**: publicar direto depois do `insert`
-  perderia o evento sempre que o broker estivesse fora. Em vez disso, o documento
-  da URL já é gravado com `url_created_pending: true` na mesma escrita, então é
-  atômico sem precisar de transação (que no Mongo exigiria replica set). Um relay
-  no worker (`interface/worker/outbox_relay.py`) busca os pendentes por um índice
-  parcial, publica e só então remove o campo. Entrega *at-least-once*: se o
-  worker cair entre o publish e a marcação, o evento sai de novo, então
-  consumidores de `URLCreated` precisam ser idempotentes (o `code` serve de
-  chave). Com mais de uma réplica do worker, o mesmo evento também pode sair
-  duas vezes.
-- **Erros no worker**: mensagens que nunca vão dar certo (JSON inválido, sem
-  `code`, código fora do formato) são rejeitadas sem requeue e vão para a DLQ
-  `url_clicked_queue.dlq`. Falhas transitórias (ex.: Mongo fora do ar) voltam
-  para a fila com espera exponencial (1s, 2s, 4s... até 30s). A fila de cliques
-  é uma *quorum queue* com `x-delivery-limit`: o próprio RabbitMQ conta as
-  entregas e, após 5 tentativas extras (~1 min), manda a mensagem para a DLQ.
-  Mensagens na DLQ podem ser reprocessadas movendo-as de volta pelo painel de
-  management (plugin shovel) quando o problema for resolvido.
-- **`click_count` é aproximado, de propósito**: o RabbitMQ entrega
-  *at-least-once* e o `$inc` não é idempotente, então uma reentrega (ex.: worker
-  cai entre o `$inc` e o ack) conta o clique duas vezes. Deduplicar exigiria um
-  id por evento e um registro de eventos processados, um custo que não se paga
-  para um contador de cliques.
-- **RabbitMQ não é obrigatório para a API**: se o broker estiver fora na
-  subida, a API sobe mesmo assim e o publisher tenta reconectar em background
-  (`APP_RABBITMQ_RECONNECT_INTERVAL_SECONDS`). Até lá, os eventos falham rápido
-  e são logados; o redirect continua funcionando. A API e o worker declaram a
-  mesma topologia (exchange, fila de cliques e DLQ), então cliques publicados
-  antes da primeira subida do worker ficam na fila em vez de serem descartados.
-- **Timeouts explícitos**: Mongo (`APP_MONGO_TIMEOUT_MS`, 2s), Redis
-  (`APP_REDIS_TIMEOUT_SECONDS`, 0,5s) e RabbitMQ (`APP_RABBITMQ_TIMEOUT_SECONDS`,
-  2s). Sem eles, um serviço travado (que não recusa a conexão, só não
-  responde) prende a requisição indefinidamente (Redis) ou por 30s (Mongo).
-- **Validação de URL contra phishing**: URLs com credenciais
-  (`https://google.com@evil.com`, cujo host real é `evil.com`) são rejeitadas,
-  assim como links para o host do próprio encurtador (o de `APP_BASE_URL`), que
-  só serviriam para esconder o destino atrás de uma cadeia de redirects.
-- **Mongo fora do ar responde `503`, não `500`**: os adapters do Mongo
-  convertem falhas de conexão em `StorageUnavailableError` (camada de
-  aplicação, sem depender do pymongo) e a API responde `503` com
-  `Retry-After`, sinalizando que vale tentar de novo.
-- **Health checks**: `GET /health` é *liveness*: não toca dependências, para
-  o orquestrador não reiniciar a API só porque o Mongo caiu. `GET /health/ready`
-  é *readiness*: só o Mongo é obrigatório (`503` sem ele); sem Redis ou
-  RabbitMQ a API segue funcionando e responde `200` com status `degraded`.
-- **Health check do worker**: o worker não tem HTTP de saúde. Ele toca um
-  arquivo de heartbeat (`APP_WORKER_HEARTBEAT_FILE`) a cada
-  `APP_WORKER_HEARTBEAT_INTERVAL_SECONDS` (10s), mas só se o loop de eventos
-  responde, o Mongo está acessível e a conexão de consumo com o RabbitMQ está de
-  pé: o processo vivo não basta, porque sem essas dependências ele não faz o seu
-  trabalho. O healthcheck do container
-  (`python -m url_shortener.interface.worker.healthcheck`) falha se o arquivo
-  tiver mais de 3 intervalos. O arquivo é apagado na subida e na parada, para um
-  heartbeat velho não parecer saudável. Atenção: no Docker/Podman, `unhealthy`
-  só sinaliza; o `restart: unless-stopped` não reinicia o container por isso
-  (um orquestrador como Kubernetes, sim).
-- **Métricas (Prometheus)**: API e worker expõem `/metrics` num servidor
-  próprio na porta `APP_METRICS_PORT` (9100), separada da porta da aplicação e
-  não publicada no compose. Na API, isso tem dois motivos: uma rota `/metrics`
-  disputaria caminho com `/{code}` (um código curto `metrics` seria possível) e
-  ficaria aberta na porta pública junto com os redirects.
-  Os nomes começam com `url_shortener_`: requisições e latência por rota
-  (rotuladas pelo template `/{code}`, nunca pelo código, para não criar uma série
-  por URL), cache `hit`/`miss`/`error`, respostas `429` por limite, eventos
-  publicados e falhas de publicação, desfecho das mensagens de clique
-  (`registered`, `requeued`, `dead_lettered`) e eventos pendentes no outbox.
-  Profundidade das filas e da DLQ vêm do plugin `rabbitmq_prometheus`, já ligado
-  na imagem (porta 15692). Com mais de um processo uvicorn por container, cada
-  um teria o próprio contador; aí seria preciso o modo multiprocess do
-  `prometheus_client`.
-- **Rate limit na criação**: `POST /urls` aceita até
-  `APP_RATE_LIMIT_CREATE_REQUESTS` chamadas por IP a cada
-  `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (padrão 20/min); acima disso responde
-  `429` com `Retry-After`. O contador fica no Redis (janela fixa) para valer
-  entre várias instâncias da API. Se o Redis falhar, a requisição passa: ele
-  segue sendo acessório.
-- **Rate limit de códigos inexistentes**: cada redirect para um código bem
-  formado que não existe conta para o IP (`APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS`
-  por `APP_RATE_LIMIT_REDIRECT_MISS_WINDOW_SECONDS`, padrão 30/min). Passado o
-  limite, o IP recebe `429` em qualquer redirect, inclusive de códigos válidos,
-  e a consulta é barrada antes de chegar ao Mongo. Quem só acessa links válidos
-  nunca é limitado. Isso custa uma leitura extra no Redis por redirect. Cache
-  negativo não resolveria: quem varre códigos aleatórios não repete código.
-  Caminhos fora do formato de código (`/favicon.ico`, `/robots.txt`, scanners
-  atrás de `/wp-login.php`) respondem `404` sem contar: são rejeitados antes do
-  Mongo, então não custam nada, e contá-los bloquearia crawlers legítimos.
-  Trade-off aceito: atrás de um IP compartilhado (CGNAT, rede corporativa),
-  quem varre códigos bloqueia por até uma janela os redirects de todos que
-  dividem aquele IP. Bloquear só os misses não protegeria o Mongo, porque só se
-  sabe que um código não existe depois de consultá-lo.
-- **IP do cliente atrás de proxy**: o uvicorn já lê `X-Forwarded-For`, mas só
-  confia nele quando a conexão vem de um IP listado em `FORWARDED_ALLOW_IPS`
-  (padrão `127.0.0.1`). Atrás de um proxy reverso, defina essa variável com o IP
-  do proxy, ou os dois rate limits vão tratar todos os clientes como um só.
-- **IPv6 limitado por /64**: os rate limits contam o IPv4 do cliente, mas no
-  IPv6 contam o prefixo /64 inteiro. Um /64 é o que o provedor entrega a um
-  único cliente, que pode trocar de endereço dentro dele à vontade: limitar por
-  endereço individual não limitaria ninguém. IPv4 mapeado em IPv6
-  (`::ffff:203.0.113.7`) conta como o IPv4.
+- **Short code generation**: an atomic counter in MongoDB (`findOneAndUpdate`
+  with `$inc`), scrambled and encoded as 7 base62 characters. Since Mongo is the
+  single source of truth (counter included) and the sequence is strictly
+  increasing, there are no collisions in normal operation, unlike hash-based or
+  random strategies. If a code does already exist (changed key or reset
+  counter), the duplicate `_id` becomes a `ShortCodeConflictError` and the use
+  case tries another code, up to 3 times. Codes equal to a fixed API route
+  (`health`, `urls`, `docs`...) are skipped too: those routes are matched before
+  `/{code}`, so the link would be unreachable. The list is derived from the
+  registered routes, so it covers future ones.
+- **Non-enumerable codes**: the counter goes through a Feistel network keyed
+  with a secret (`APP_CODE_SECRET`) over the exact domain `[0, 62^7)`
+  (`domain/services/code_scrambler.py`). It is a bijection, so there are still
+  no collisions, and without the key previously seen codes don't help predict
+  the next ones. An earlier version used `n * K mod 62^7`, which is linear: two
+  consecutive codes always differed by `K`, so two creations were enough to
+  enumerate everything. The key is required and has no default. Changing it
+  doesn't invalidate existing links (the code is stored, not recomputed); it
+  only changes future ones. The space holds ~3.5 trillion codes.
+- **Redis is cache only**: it never holds data that can't be rebuilt from
+  Mongo. If it goes down, the system keeps working (with more Mongo reads);
+  cache read and write failures are logged and ignored.
+- **CQRS**: `CreateShortUrlCommandHandler` only writes; `GetOriginalUrlQueryHandler`
+  only reads, with no side effects. Click tracking is a separate command
+  (`TrackClickCommandHandler`) that the router schedules as a background task
+  after resolving the URL. Each handler receives its ports through constructor
+  injection.
+- **Events with a real consumer**: the `URLClicked` event
+  is published on redirect (without blocking the response) and consumed by a
+  separate worker that increments `click_count` in Mongo: a genuine use of
+  RabbitMQ without growing into a full analytics feature. The `URLCreated`
+  event exists for a future extension (no consumer today).
+- **`URLCreated` via transactional outbox**: publishing right after the
+  `insert` would lose the event whenever the broker was down. Instead, the URL
+  document is written with `url_created_pending: true` in the same write, so it
+  is atomic without a transaction (which in Mongo would require a replica set).
+  A relay in the worker (`interface/worker/outbox_relay.py`) finds pending
+  documents through a partial index, publishes, and only then removes the
+  field. Delivery is *at-least-once*: if the worker dies between publishing and
+  marking, the event goes out again, so `URLCreated` consumers must be
+  idempotent (the `code` works as the key). With more than one worker replica,
+  the same event may also go out twice.
+- **Worker errors**: messages that will never succeed (invalid JSON, missing
+  `code`, malformed code) are rejected without requeue and go to the
+  `url_clicked_queue.dlq` DLQ. Transient failures (e.g. Mongo down) go back to
+  the queue with exponential backoff (1s, 2s, 4s... up to 30s). The click queue
+  is a *quorum queue* with `x-delivery-limit`: RabbitMQ itself counts the
+  deliveries and, after 5 extra attempts (~1 min), sends the message to the
+  DLQ. Messages in the DLQ can be reprocessed by moving them back through the
+  management UI (shovel plugin) once the problem is fixed.
+- **`click_count` is approximate, on purpose**: RabbitMQ delivers
+  *at-least-once* and `$inc` isn't idempotent, so a redelivery (e.g. the worker
+  dies between the `$inc` and the ack) counts the click twice. Deduplicating
+  would need a per-event id and a record of processed events, a cost that
+  doesn't pay off for a click counter.
+- **RabbitMQ isn't required by the API**: if the broker is down at startup,
+  the API starts anyway and the publisher keeps reconnecting in the background
+  (`APP_RABBITMQ_RECONNECT_INTERVAL_SECONDS`). Until then, events fail fast and
+  are logged; redirects keep working. The API and the worker declare the same
+  topology (exchange, click queue and DLQ), so clicks published before the
+  worker's first start stay in the queue instead of being dropped.
+- **Explicit timeouts**: Mongo (`APP_MONGO_TIMEOUT_MS`, 2s), Redis
+  (`APP_REDIS_TIMEOUT_SECONDS`, 0.5s) and RabbitMQ
+  (`APP_RABBITMQ_TIMEOUT_SECONDS`, 2s). Without them, a stuck service (one
+  that doesn't refuse the connection, just doesn't answer) holds the request
+  indefinitely (Redis) or for 30s (Mongo).
+- **URL validation against phishing**: URLs with credentials
+  (`https://google.com@evil.com`, whose real host is `evil.com`) are rejected,
+  as are links to the shortener's own host (the one in `APP_BASE_URL`), which
+  would only serve to hide the destination behind a chain of redirects.
+- **Mongo down returns `503`, not `500`**: the Mongo adapters turn connection
+  failures into `StorageUnavailableError` (application layer, no pymongo
+  dependency) and the API answers `503` with `Retry-After`, signaling that a
+  retry is worthwhile.
+- **Health checks**: `GET /health` is *liveness*: it doesn't touch
+  dependencies, so the orchestrator won't restart the API just because Mongo
+  went down. `GET /health/ready` is *readiness*: only Mongo is required (`503`
+  without it); without Redis or RabbitMQ the API keeps working and answers
+  `200` with status `degraded`.
+- **Worker health check**: the worker has no HTTP health endpoint. It touches a
+  heartbeat file (`APP_WORKER_HEARTBEAT_FILE`) every
+  `APP_WORKER_HEARTBEAT_INTERVAL_SECONDS` (10s), but only if the event loop is
+  responsive, Mongo is reachable and the RabbitMQ consumer connection is up: a
+  live process isn't enough, because without those dependencies it can't do
+  its job. The container healthcheck
+  (`python -m url_shortener.interface.worker.healthcheck`) fails if the file is
+  older than 3 intervals. The file is deleted on startup and shutdown, so a
+  stale heartbeat never looks healthy. Note: in Docker/Podman, `unhealthy` is
+  only a signal; `restart: unless-stopped` doesn't restart the container
+  because of it (an orchestrator such as Kubernetes does).
+- **Metrics (Prometheus)**: the API and the worker expose `/metrics` on a
+  dedicated server on `APP_METRICS_PORT` (9100), separate from the application
+  port and not published by the compose file. For the API there are two
+  reasons: a `/metrics` route would compete with `/{code}` (a short code
+  `metrics` would be possible) and would be exposed on the public port along
+  with the redirects. Names start with `url_shortener_`: requests and latency
+  per route (labeled with the `/{code}` template, never the code itself, to
+  avoid one series per URL), cache `hit`/`miss`/`error`, `429` responses per
+  limit, published events and publish failures, click message outcomes
+  (`registered`, `requeued`, `dead_lettered`) and pending outbox events. Queue
+  and DLQ depth come from the `rabbitmq_prometheus` plugin, already enabled in
+  the image (port 15692). With more than one uvicorn process per container,
+  each would have its own counters; that would require the `prometheus_client`
+  multiprocess mode.
+- **Rate limit on creation**: `POST /urls` accepts up to
+  `APP_RATE_LIMIT_CREATE_REQUESTS` calls per IP every
+  `APP_RATE_LIMIT_CREATE_WINDOW_SECONDS` (default 20/min); above that it
+  answers `429` with `Retry-After`. The counter lives in Redis (fixed window)
+  so it holds across multiple API instances. If Redis fails, the request goes
+  through: it remains an accessory.
+- **Rate limit on unknown codes**: each redirect to a well-formed code that
+  doesn't exist counts against the IP (`APP_RATE_LIMIT_REDIRECT_MISS_REQUESTS`
+  per `APP_RATE_LIMIT_REDIRECT_MISS_WINDOW_SECONDS`, default 30/min). Past the
+  limit, the IP gets `429` on any redirect, valid codes included, and the
+  lookup is stopped before reaching Mongo. Clients that only open valid links
+  are never limited. This costs one extra Redis read per redirect. A negative
+  cache wouldn't help: whoever scans random codes never repeats one. Paths that
+  don't match the code format (`/favicon.ico`, `/robots.txt`, scanners probing
+  `/wp-login.php`) answer `404` without counting: they're rejected before Mongo,
+  so they cost nothing, and counting them would block legitimate crawlers.
+  Accepted trade-off: behind a shared IP (CGNAT, corporate network), whoever
+  scans codes blocks redirects for everyone on that IP for up to one window.
+  Blocking only the misses wouldn't protect Mongo, because a code is only
+  known to be missing after looking it up.
+- **Client IP behind a proxy**: uvicorn already reads `X-Forwarded-For`, but
+  only trusts it when the connection comes from an IP listed in
+  `FORWARDED_ALLOW_IPS` (default `127.0.0.1`). Behind a reverse proxy, set this
+  variable to the proxy's IP, or both rate limits will treat every client as
+  one.
+- **IPv6 limited per /64**: rate limits count the client's IPv4 address, but
+  for IPv6 they count the whole /64 prefix. A /64 is what a provider hands to a
+  single customer, who can switch addresses inside it at will: limiting per
+  individual address wouldn't limit anyone. IPv4-mapped IPv6
+  (`::ffff:203.0.113.7`) counts as the IPv4 address.
 
-## Rodando com Docker Compose
+## Running with Docker Compose
 
 ```bash
 cp .env.example .env
-# em produção, defina APP_CODE_SECRET no .env (openssl rand -hex 32); sem ela, o
-# compose usa uma chave de desenvolvimento
+# in production, set APP_CODE_SECRET in .env (openssl rand -hex 32); without it,
+# the compose file uses a development key
 docker compose up --build
 ```
-Sobe `api` (porta 8000), `worker`, `mongo`, `redis`, `rabbitmq` (painel de
-management em `localhost:15672`, usuário/senha `guest`/`guest`), `prometheus` e
-`grafana` (ver [Observabilidade](#observabilidade-prometheus-e-grafana)).
-`api` e `worker` usam `restart: unless-stopped`: se o processo cair, voltam
-sozinhos.
+Starts `api` (port 8000), `worker`, `mongo`, `redis`, `rabbitmq` (management
+UI at `localhost:15672`, user/password `guest`/`guest`), `prometheus` and
+`grafana` (see [Observability](#observability-prometheus-and-grafana)).
+`api` and `worker` use `restart: unless-stopped`: if the process dies, they
+come back on their own.
 
-O compose é para desenvolvimento: o RabbitMQ usa o usuário padrão `guest/guest`
-(acesso total ao broker) e o painel é publicado só em `127.0.0.1`, para não
-ficar aberto na rede. Em produção, crie um usuário com
-`RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` e ajuste `APP_RABBITMQ_URI`.
+The compose file is meant for development: RabbitMQ uses the default
+`guest/guest` user (full broker access) and the UI is published only on
+`127.0.0.1`, so it isn't open to the network. In production, create a user with
+`RABBITMQ_DEFAULT_USER`/`RABBITMQ_DEFAULT_PASS` and adjust `APP_RABBITMQ_URI`.
 
-### Testando manualmente
+### Manual testing
 
 ```bash
 curl -X POST localhost:8000/urls -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/pagina-longa"}'
+  -d '{"url": "https://example.com/some-long-page"}'
 # => {"code": "cJinsL5", "short_url": "http://localhost:8000/cJinsL5", ...}
 
 curl -v localhost:8000/cJinsL5
-# => 307 Temporary Redirect para a URL original
+# => 307 Temporary Redirect to the original URL
 ```
 
-Após alguns segundos, o `click_count` do documento no Mongo deve ter sido
-incrementado pelo worker. Confirme com:
+After a few seconds, the document's `click_count` in Mongo should have been
+incremented by the worker. Check with:
 
 ```bash
-docker compose exec mongo mongosh url_shortener --eval 'db.urls.find()'
+docker compose exec -T mongo mongosh url_shortener --quiet --eval 'printjson(db.urls.find().toArray())'
 ```
 
-## Observabilidade: Prometheus e Grafana
+The interactive API docs (Swagger UI) are at `localhost:8000/docs`.
 
-O compose também sobe:
+## Observability: Prometheus and Grafana
 
-- **Prometheus** (`localhost:9090`): a cada 5s coleta as métricas da API e do
-  worker (porta 9100 de cada um) e do RabbitMQ (plugin `rabbitmq_prometheus`,
-  porta 15692) e guarda o histórico por 7 dias (`observability/prometheus.yml`).
-  Em *Status → Targets* dá para ver se os três estão `UP`.
-- **Grafana** (`localhost:3000`): abre direto no dashboard *URL Shortener*, sem
-  login. O datasource e o dashboard são provisionados a partir de
-  `observability/grafana/`. Alterações feitas no navegador somem ao recriar o
-  container: para manter, exporte o JSON (*Share → Export*) e salve em
-  `observability/grafana/dashboards/url-shortener.json`.
+The compose file also starts:
 
-Os dois ficam só no `127.0.0.1`, e o Grafana roda sem login e com permissão de
-edição: configuração de desenvolvimento, não de produção.
+- **Prometheus** (`localhost:9090`): every 5s it scrapes metrics from the API
+  and the worker (port 9100 on each) and from RabbitMQ (`rabbitmq_prometheus`
+  plugin, port 15692), keeping 7 days of history (`observability/prometheus.yml`).
+  *Status → Targets* shows whether all three are `UP`.
+- **Grafana** (`localhost:3000`): opens straight into the *URL Shortener*
+  dashboard, no login. The datasource and the dashboard are provisioned from
+  `observability/grafana/`. Changes made in the browser are lost when the
+  container is recreated: to keep them, export the JSON (*Share → Export*) and
+  save it to `observability/grafana/dashboards/url-shortener.json`.
 
-O dashboard tem quatro blocos: **saúde** (API, worker e RabbitMQ sendo
-coletados, taxa de cache hit, outbox pendente), **tráfego** (redirects por
-status, requisições e latência p95 por rota, cache hit/miss/erro), **proteção**
-(429 por limite) e **eventos e filas** (publicados e falhas, desfecho das
-mensagens de clique, outbox pendente e mensagens nas filas do RabbitMQ).
+Both are bound to `127.0.0.1` only, and Grafana runs without login and with
+edit permissions: a development setup, not a production one.
 
-Os gráficos mostram taxas (`rate()`), que precisam de tráfego contínuo: uma
-rajada de requisições antes da primeira coleta não aparece. Para gerar tráfego:
+The dashboard has four sections: **health** (API, worker and RabbitMQ being
+scraped, cache hit rate, pending outbox), **traffic** (redirects by status,
+requests and p95 latency per route, cache hit/miss/error), **protection** (429
+per limit) and **events and queues** (published events and failures, click
+message outcomes, pending outbox and messages in the RabbitMQ queues).
+
+The charts show rates (`rate()`), which need continuous traffic: a burst of
+requests before the first scrape won't show up. To generate traffic:
 
 ```bash
 while true; do
@@ -231,32 +241,36 @@ while true; do
 done
 ```
 
-Experimentos para ver os gráficos reagirem, com o gerador rodando:
+Experiments to watch the charts react, with the generator running:
 
-- `docker compose stop rabbitmq`: *Outbox pendente* sobe a cada URL criada e
-  aparecem falhas de publicação de `url.clicked`. Os redirects seguem
-  funcionando. Com `docker compose start rabbitmq`, o outbox volta a zero.
-- `docker compose stop worker`: a fila `url_clicked_queue` acumula os cliques;
-  com `start`, ela esvazia de uma vez.
-- `docker compose stop redis`: o cache passa a dar `error`, cada redirect vai
-  ao Mongo e o rate limit deixa de valer (ele libera quando o Redis falha).
-- Acessar 31 códigos inexistentes em menos de 1 minuto: aparece `429` de
-  `redirect_miss`, e por até 1 minuto o mesmo IP recebe `429` também nos links
-  válidos.
+- `docker compose stop rabbitmq`: *Pending outbox* grows with each created URL
+  and `url.clicked` publish failures show up. Redirects keep working. After
+  `docker compose start rabbitmq`, the outbox drops back to zero.
+- `docker compose stop worker`: the `url_clicked_queue` queue piles up clicks;
+  after `start`, it drains at once.
+- `docker compose stop redis`: the cache starts reporting `error`, every
+  redirect goes to Mongo and the rate limit stops applying (it lets requests
+  through when Redis fails).
+- Hitting 31 nonexistent codes in under 1 minute: `redirect_miss` `429`s show
+  up, and for up to 1 minute the same IP also gets `429` on valid links.
 
-## Desenvolvimento local
+## Local development
 
-O CI (`.github/workflows/ci.yml`) roda lint, formatação, mypy e testes unitários
-a cada push na `main` e em pull requests; se passarem, roda os testes de
-integração.
+CI (`.github/workflows/ci.yml`) runs lint, formatting, mypy and unit tests on
+every push to `main` and on pull requests; if they pass, it runs the
+integration tests.
 
 ```bash
 uv sync
-# Para subir API/worker fora do compose (os testes já usam uma chave própria):
-export APP_CODE_SECRET=$(openssl rand -hex 32)   # ou defina no .env
-uv run pytest              # testes unitários (rápidos, sem Docker)
-uv run pytest -m integration  # teste de integração ponta a ponta (requer Docker)
+# To run the API/worker outside compose (the tests already use their own key):
+export APP_CODE_SECRET=$(openssl rand -hex 32)   # or set it in .env
+uv run pytest              # unit tests (fast, no Docker)
+uv run pytest -m integration  # end-to-end integration test (requires Docker)
 uv run ruff check .
 uv run ruff format .
 uv run mypy src/
 ```
+
+## License
+
+[MIT](LICENSE)
