@@ -145,6 +145,10 @@ os adapters em `infrastructure/**` as implementam por structural typing.
   Caminhos fora do formato de código (`/favicon.ico`, `/robots.txt`, scanners
   atrás de `/wp-login.php`) respondem `404` sem contar: são rejeitados antes do
   Mongo, então não custam nada, e contá-los bloquearia crawlers legítimos.
+  Trade-off aceito: atrás de um IP compartilhado (CGNAT, rede corporativa),
+  quem varre códigos bloqueia por até uma janela os redirects de todos que
+  dividem aquele IP. Bloquear só os misses não protegeria o Mongo, porque só se
+  sabe que um código não existe depois de consultá-lo.
 - **IP do cliente atrás de proxy**: o uvicorn já lê `X-Forwarded-For`, mas só
   confia nele quando a conexão vem de um IP listado em `FORWARDED_ALLOW_IPS`
   (padrão `127.0.0.1`). Atrás de um proxy reverso, defina essa variável com o IP
